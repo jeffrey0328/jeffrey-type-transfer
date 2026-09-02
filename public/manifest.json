@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "jeffrey-type-transfer",
+  "short_name": "jeffrey-type-transfer",
+  "description": "选中网页输入框文字，通过 Codex、Claude、Gemini、Qwen、Ollama、GLM、DeepSeek 或自定义 API 翻译并替换。",
+  "version": "0.1.0",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "contextMenus", "scripting", "sidePanel", "storage"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://api.openai.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "打开 jeffrey-type-transfer"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "commands": {
+    "translate-selection": {
+      "suggested_key": {
+        "default": "Alt+Shift+T",
+        "mac": "Command+Shift+T"
+      },
+      "description": "翻译并替换当前输入框中的选中文字"
+    }
+  }
+}
