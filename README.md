@@ -8,7 +8,7 @@ The default connection is the local **Codex CLI**, so an existing ChatGPT/Codex 
 
 ## Features
 
-- Activates only after text is selected inside an `input` or `textarea`
+- Continuously recognizes selected text in searches, inputs, comments, mail replies, and other editable regions, including same-page frames
 - Detects the source language and translates into 12 common target languages
 - Natural, formal, concise, and conversational tones
 - Uses Codex CLI by default; no OpenAI API key is required
@@ -20,7 +20,45 @@ The default connection is the local **Codex CLI**, so an existing ChatGPT/Codex 
 
 ## Quick Start: Codex CLI
 
-### 1. Install and sign in to Codex CLI
+The recommended path is to let a coding Agent prepare and verify the local environment. Both setup modes use your ChatGPT/Codex login and do not require an OpenAI API key.
+
+### Option A (Recommended): Agent-Assisted Setup
+
+Open Codex or another coding Agent in this project directory, then copy the prompt below:
+
+```text
+Set up the jeffrey-type-transfer browser extension in the current project directory. Use Codex CLI as the default model connection and do not create or request an OpenAI API key.
+
+Please complete the following work:
+1. Inspect the project requirements, Node.js version, npm availability, and whether Codex CLI is already installed. Start with read-only checks. Do not inspect or enumerate the Codex home directory or any credential file.
+2. Do not initialize or reinitialize Git. If `.git` is missing, continue without running `git init`. Do not modify Git configuration or repository metadata as part of setup.
+3. If Codex CLI is missing, show me the exact global installation command and ask for confirmation immediately before running it. Use: npm install -g @openai/codex
+4. Run `codex login status` to check the login. If login is required, explain that `codex login` opens a browser and ask for confirmation before running it. After it starts, pause and let me complete browser sign-in myself. Continue only after I confirm that sign-in is complete.
+5. Run `npm run check` and `npm test`. The frontend has no dependencies, so no `npm install` or build is required.
+6. Start `npm run bridge` on `127.0.0.1:8989`, then request `http://127.0.0.1:8989/health?provider=codex` and confirm that installed=true and ready=true.
+7. Tell me how to select the current project root directly in Chrome or Edge's **Load unpacked** screen. Do not install the browser extension or approve browser permissions on my behalf.
+
+Failure handling:
+- If a command cannot start and Codex reports `helper_unknown_error: setup refresh had errors`, stop retrying ordinary commands. On Windows, inspect only the non-secret diagnostics needed to determine whether the project directory and `.git` have mismatched owners or ACLs, then report the exact failing path and error.
+- If `.git` is owned by a Codex sandbox account, explain that repairing it may require an Administrator PowerShell. Show narrowly scoped `takeown` and `icacls` commands for this repository's exact `.git` path, but do not execute them until I approve. Never delete `.git`.
+- Do not repeatedly rerun ordinary project commands outside the sandbox as a workaround. Do not change file ownership, ACLs, sandbox mode, or run an elevated repair command without showing the exact proposed command and receiving my explicit approval.
+- If permissions are repaired, ask me to restart Codex and confirm that the project has been reopened before continuing from the failed step.
+
+Safety rules:
+- Do not read, print, copy, or modify Codex credential files such as `~/.codex/auth.json`.
+- Do not request, generate, or store any API key or access token.
+- Do not bind the bridge to `0.0.0.0` or expose port 8989 outside this device.
+- Do not run `git init`, modify `.git`, change repository ownership or ACLs, edit unrelated files, push to Git, or publish anything.
+- Stop and ask me before any global software installation, account login, ownership or ACL change, sandbox-mode change, elevated command, or other action that requires my approval.
+```
+
+After the Agent finishes, load the current project root in Chrome or Edge and click **Check connection** in the extension settings.
+
+If Codex reports `helper_unknown_error: setup refresh had errors` on Windows, do not delete `.git`. A repository ownership or ACL mismatch can prevent the Windows sandbox from preparing its access rules. Review the Agent's exact diagnosis, approve only a narrowly scoped permission repair if appropriate, restart Codex, and run the prompt again. See the official [Windows sandbox documentation](https://learn.chatgpt.com/docs/windows/windows-sandbox).
+
+### Option B: Manual Setup
+
+#### 1. Install and sign in to Codex CLI
 
 ```powershell
 npm install -g @openai/codex
@@ -35,29 +73,41 @@ codex login status
 
 Codex CLI supports ChatGPT subscription authentication. See [Codex authentication](https://learn.chatgpt.com/docs/auth).
 
-### 2. Install dependencies and start the local bridge
+#### 2. Start the local bridge
 
 ```powershell
-npm install
 npm run bridge
 ```
 
 The bridge listens only on `127.0.0.1:8989`. Keep this terminal running.
 
-### 3. Build the extension
+You can also use the extension's **One-click start** without keeping a terminal window open. Native Messaging requires a one-time local host registration:
+
+1. Open `chrome://extensions` or `edge://extensions`, find Jeffrey Type Transfer, and copy its extension ID.
+2. From the project root, run the following once, replacing `<extension ID>` with the actual value:
 
 ```powershell
-npm run build
+powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId <extension ID> -Browser Both
 ```
 
-### 4. Load it in Chrome or Edge
+3. Reload the unpacked extension, open **Connection & Settings**, and select **One-click start**.
+
+The installer uses per-user Chrome/Edge registry entries and does not require administrator privileges. It compiles a small native host from the source in this repository. The host only accepts a fixed `start` action, launches this project's `bridge/server.mjs`, and forces `127.0.0.1:8989`. It does not read Codex credentials and cannot accept arbitrary commands, paths, hosts, or ports from the extension.
+
+To remove the registration:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\native-host\uninstall.ps1 -Browser Both
+```
+
+#### 3. Load it in Chrome or Edge (no build required)
 
 1. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
 2. Enable **Developer mode**.
 3. Choose **Load unpacked**.
-4. Select this project's `dist` directory.
-5. Click **jeffrey-type-transfer** in the browser toolbar to open the side panel.
-6. Open **Connection & Settings** and click **Check connection**.
+4. Select this project root directly (the directory containing the root `manifest.json`).
+5. Click **Jeffrey Type Transfer** in the browser toolbar to open the side panel.
+6. Open **Connection & Settings** and click **One-click start** or **Check connection**. After source changes, reload the extension; no build is required.
 
 ## CLI and Local Runtime Support
 
@@ -132,13 +182,13 @@ Both modes use Claude Code as the non-interactive CLI shell. Configure the provi
 
 ## Usage
 
-1. Select text inside a single-line input or textarea on a web page.
+1. Select text inside a search box, input, comment box, mail reply, or another editable region.
 2. Open the jeffrey-type-transfer side panel and wait for **Selection locked**.
 3. Choose the target language and tone.
 4. Click **Translate and replace selected text**, or press `Alt + Shift + T`.
 5. Select part of the source text in the bilingual comparison to highlight the aligned translation.
 
-To avoid changing passwords or unsupported editors, the extension handles only `text`, `search`, `url`, `tel`, and `email` inputs plus ordinary textareas. Password fields and rich-text editors are intentionally excluded.
+The extension continuously stores the last valid editable selection in the page and its frames, so opening the side panel does not lose it. It handles inputs for which the browser exposes text selection, ordinary textareas, `contenteditable`, and `designMode` editors. Password fields are always excluded. Canvas editors such as Google Docs, closed shadow roots, and editors whose state is fully detached from the DOM can still prevent in-place replacement.
 
 ## Optional API-Key Mode
 
@@ -149,7 +199,7 @@ An API key is not required for the default workflow. To use a direct model API, 
 - Model name
 - API key
 
-A custom HTTPS base URL triggers a browser permission request for that origin. The key is stored in `chrome.storage.local` and never written to the repository, but browser local storage is not a dedicated secrets vault. Use this mode only on a trusted personal device.
+Continuous recognition in search, comment, and mail editors requires read access to HTTP/HTTPS pages and their frames when the extension is installed. Text is sent to the selected model service only after you explicitly start a translation. The key is stored in `chrome.storage.local` and never written to the repository, but browser local storage is not a dedicated secrets vault. Use this mode only on a trusted personal device.
 
 ## Local Bridge Architecture
 
@@ -174,22 +224,29 @@ Prompts are passed without a shell. Structured output contains both the complete
 ```powershell
 npm run dev       # Preview at http://127.0.0.1:5173
 npm run bridge    # Start the local model bridge
-npm run check     # Run TypeScript checks
-npm run build     # Generate the loadable dist extension
+npm run check     # Check manifest, runtime files, and JavaScript syntax
+npm test          # Run Node.js unit tests
 ```
 
-The ordinary web preview can verify the side-panel interface and bilingual highlighting. Context menus, shortcuts, page-selection capture, and in-place replacement must be tested with the unpacked extension loaded in Chrome or Edge. Open `http://127.0.0.1:5173/?empty=1` to preview the disabled no-selection state.
+The ordinary web preview can verify the side-panel interface and bilingual highlighting. Context menus, shortcuts, page-selection capture, and in-place replacement must be tested with the project root loaded as an unpacked extension in Chrome or Edge. After source changes, reload the extension without building. Open `http://127.0.0.1:5173/?empty=1` to preview the disabled no-selection state.
 
 ## Project Structure
 
 ```text
+manifest.json              Chromium MV3 manifest; load the project root directly
+background.js              Context menu, shortcut, translation, and replacement jobs
+sidepanel.html/js/css      Native side-panel and settings interface
+app-config.js              Providers, languages, and default configuration
+page-selection.js          Page selection capture and replacement
+selection-tracker.js       Persistent editable-selection tracking across pages and frames
+storage.js                 Browser configuration and task state
+translate.js               CLI bridge and API requests
 bridge/server.mjs          Multi-model CLI adapters and local bridge
-public/manifest.json       Chromium MV3 manifest
-src/background.ts          Context menu, shortcut, translation, and replacement jobs
-src/components/            Translation and settings interfaces
-src/lib/                   Page selection, storage, and model integrations
+native-bridge.js           Native Messaging invocation used by the extension background
+native-host/               Windows native host source and Chrome/Edge registration scripts
+scripts/                   Dependency-free preview and checks
+tests/                     Node.js unit tests
 design/                    Visual design references
-dist/                      Loadable extension build output
 ```
 
 ## Security

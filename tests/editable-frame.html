@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>iframe 编辑器</title></head>
+<body>
+  <label>iframe 评论<textarea id="frame-comment">iframe comment text</textarea></label>
+  <output id="tracked-selection">等待选区</output>
+  <button id="replace-frame-selection">替换 iframe 选区</button>
+  <output id="frame-replace-result">等待替换</output>
+  <script src="tracker-harness.js"></script>
+  <script src="../selection-tracker.js"></script>
+  <script type="module" src="editable-frame.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Editable Selection Fixture</title>
+  <style>
+    body { max-width: 760px; margin: 32px auto; font: 16px/1.5 system-ui; }
+    label, .field { display: grid; gap: 6px; margin: 20px 0; }
+    input, textarea, [contenteditable], iframe { padding: 12px; border: 1px solid #aaa; border-radius: 8px; }
+    textarea, [contenteditable] { min-height: 70px; }
+    iframe { width: 100%; min-height: 120px; box-sizing: border-box; }
+    output { display: block; padding: 12px; background: #eef7f4; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>可编辑选区测试</h1>
+  <label>搜索框<input id="search" type="search" value="search selected words"></label>
+  <label>评论框<textarea id="comment">comment selected words</textarea></label>
+  <div class="field">邮件回复<div id="mail-reply" contenteditable="true">mail reply selected words</div></div>
+  <div class="field">iframe 编辑器<iframe id="editor-frame" src="editable-frame.html"></iframe></div>
+  <output id="tracked-selection">等待选区</output>
+  <button id="replace-selection">替换已保存选区</button>
+  <output id="replace-result">等待替换</output>
+  <script src="tracker-harness.js"></script>
+  <script src="../selection-tracker.js"></script>
+  <script type="module" src="editable-fixture.js"></script>
+</body>
+</html>

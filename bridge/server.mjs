@@ -279,7 +279,10 @@ async function health(provider) {
         installed: true,
         authenticated: false,
         ready: false,
-        statusMessage: `${adapter.label} 已安装，但尚未完成登录`,
+        statusMessage:
+          adapter.id === "codex"
+            ? "Codex CLI 已安装，但尚未登录；请在终端运行 codex login"
+            : `${adapter.label} 已安装，但尚未完成登录`,
         version: versionResult.stdout,
       };
     }
@@ -555,7 +558,7 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`jeffrey-type-transfer 多模型 CLI 桥接服务运行于 http://${HOST}:${PORT}`);
+  console.log(`Jeffrey Type Transfer 多模型 CLI 桥接服务运行于 http://${HOST}:${PORT}`);
   console.log("支持 Codex、Claude Code、Gemini/Antigravity、Qwen Code、Ollama、GLM 与 DeepSeek 接入");
   console.log("按 Ctrl+C 停止服务");
 });
