@@ -1,18 +1,49 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const HOST = process.env.YUQIAO_HOST || "127.0.0.1";
-const PORT = Number(process.env.YUQIAO_PORT || 8989);
+const NATIVE_LAUNCH = process.argv.includes("--native-launch");
+const HOST = NATIVE_LAUNCH ? "127.0.0.1" : process.env.YUQIAO_HOST || "127.0.0.1";
+const PORT = NATIVE_LAUNCH ? 8989 : Number(process.env.YUQIAO_PORT || 8989);
 const MAX_BODY_BYTES = 120_000;
 const MAX_TEXT_LENGTH = 50_000;
 const RUN_TIMEOUT_MS = Number(process.env.YUQIAO_TIMEOUT_MS || 120_000);
 const OUTPUT_SCHEMA_PATH = fileURLToPath(new URL("./translation-schema.json", import.meta.url));
 const OUTPUT_SCHEMA_TEXT = readFileSync(OUTPUT_SCHEMA_PATH, "utf8");
 const OUTPUT_SCHEMA = JSON.parse(OUTPUT_SCHEMA_TEXT);
+const RUNTIME_OUTPUT_SCHEMA_PATH = join(
+  tmpdir(),
+  `jeffrey-type-transfer-schema-${process.pid}.json`,
+);
+writeFileSync(RUNTIME_OUTPUT_SCHEMA_PATH, OUTPUT_SCHEMA_TEXT, "utf8");
+process.once("exit", () => {
+  try {
+    unlinkSync(RUNTIME_OUTPUT_SCHEMA_PATH);
+  } catch {
+    // The operating system can remove an abandoned temporary schema later.
+  }
+});
 const OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const PROVIDER_IDS = new Set(["codex", "claude", "gemini", "qwen", "ollama", "glm", "deepseek"]);
+const NATIVE_CONFIG_PATH = fileURLToPath(new URL("../native-host/bin/host-config.json", import.meta.url));
+
+function loadNativeCliPaths() {
+  if (!NATIVE_LAUNCH || !existsSync(NATIVE_CONFIG_PATH)) return {};
+  try {
+    const configured = JSON.parse(readFileSync(NATIVE_CONFIG_PATH, "utf8")).cliPaths;
+    if (!configured || typeof configured !== "object") return {};
+    return Object.fromEntries(Object.entries(configured).filter(([, value]) =>
+      typeof value === "string" && isAbsolute(value) && existsSync(value),
+    ));
+  } catch {
+    return {};
+  }
+}
+
+const NATIVE_CLI_PATHS = loadNativeCliPaths();
 let activeRuns = 0;
 
 function getAdapter(provider) {
@@ -21,7 +52,7 @@ function getAdapter(provider) {
       return {
         id: provider,
         label: "Claude Code",
-        command: process.env.CLAUDE_BIN || "claude",
+        command: NATIVE_CLI_PATHS.claude || process.env.CLAUDE_BIN || "claude",
         versionArgs: ["--version"],
         auth: "claude",
         runner: "claude",
@@ -30,7 +61,7 @@ function getAdapter(provider) {
       return {
         id: provider,
         label: "Gemini · Antigravity CLI",
-        command: process.env.AGY_BIN || "agy",
+        command: NATIVE_CLI_PATHS.agy || process.env.AGY_BIN || "agy",
         versionArgs: ["--version"],
         auth: "deferred",
         runner: "antigravity",
@@ -39,7 +70,7 @@ function getAdapter(provider) {
       return {
         id: provider,
         label: "Qwen Code",
-        command: process.env.QWEN_BIN || "qwen",
+        command: NATIVE_CLI_PATHS.qwen || process.env.QWEN_BIN || "qwen",
         versionArgs: ["--version"],
         auth: "qwen",
         runner: "qwen",
@@ -48,7 +79,7 @@ function getAdapter(provider) {
       return {
         id: provider,
         label: "Ollama 本地模型",
-        command: process.env.OLLAMA_BIN || "ollama",
+        command: NATIVE_CLI_PATHS.ollama || process.env.OLLAMA_BIN || "ollama",
         versionArgs: ["--version"],
         auth: "local",
         runner: "ollama",
@@ -57,7 +88,7 @@ function getAdapter(provider) {
       return {
         id: provider,
         label: "GLM Coding Plan · Claude Code",
-        command: process.env.CLAUDE_BIN || "claude",
+        command: NATIVE_CLI_PATHS.claude || process.env.CLAUDE_BIN || "claude",
         versionArgs: ["--version"],
         auth: "external",
         runner: "claude",
@@ -66,7 +97,7 @@ function getAdapter(provider) {
       return {
         id: provider,
         label: "DeepSeek · Claude Code",
-        command: process.env.CLAUDE_BIN || "claude",
+        command: NATIVE_CLI_PATHS.claude || process.env.CLAUDE_BIN || "claude",
         versionArgs: ["--version"],
         auth: "external",
         runner: "claude",
@@ -75,7 +106,7 @@ function getAdapter(provider) {
       return {
         id: "codex",
         label: "Codex CLI",
-        command: process.env.CODEX_BIN || "codex",
+        command: NATIVE_CLI_PATHS.codex || process.env.CODEX_BIN || "codex",
         versionArgs: ["--version"],
         auth: "codex",
         runner: "codex",
@@ -307,8 +338,6 @@ function createPrompt({ text, sourceLanguage, targetLanguage, tone }) {
     `目标语言：${targetLanguage}`,
     `语气：${tone}`,
     "保留原意、专有名词、数字、段落、Markdown 与格式。",
-    "把原文和译文拆分成简短、顺序一致的语义对应片段。",
-    "所有原文字符（包括标点与空白）必须在 source 片段中按原顺序出现且只出现一次。",
     "translation 必须是可以直接替换网页选区的完整译文。",
     "严格按照输出 JSON Schema 返回，不要解释、标题、引号、Markdown 围栏或任何额外说明。",
     "",
@@ -316,7 +345,7 @@ function createPrompt({ text, sourceLanguage, targetLanguage, tone }) {
     "<<<TRANSLATION_INPUT>>>",
     text,
     "<<<END_TRANSLATION_INPUT>>>",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function parseJsonText(value) {
@@ -343,7 +372,7 @@ function findStructuredTranslation(value, depth = 0) {
     return null;
   }
   if (typeof value !== "object") return null;
-  if (typeof value.translation === "string" && Array.isArray(value.segments)) return value;
+  if (typeof value.translation === "string") return value;
   for (const key of [
     "structured_output",
     "structured_result",
@@ -360,24 +389,19 @@ function findStructuredTranslation(value, depth = 0) {
   return null;
 }
 
-function validateTranslation(parsed, text, providerLabel) {
-  const segments = Array.isArray(parsed?.segments)
-    ? parsed.segments.filter(
-        (segment) =>
-          segment && typeof segment.source === "string" && typeof segment.target === "string",
-      )
-    : [];
-  if (typeof parsed?.translation !== "string" || !parsed.translation || segments.length === 0) {
+function validateTranslation(parsed, providerLabel) {
+  if (typeof parsed?.translation !== "string" || !parsed.translation) {
     throw new Error(`${providerLabel} 返回的翻译结果不完整`);
   }
-  if (segments.map((segment) => segment.source).join("") !== text) {
-    throw new Error(`${providerLabel} 返回的原文分段与选区不一致，请重试`);
-  }
+  return { translation: parsed.translation };
+}
+
+function formatTranslationResponse(parsed, text, provider, clientProtocol) {
+  const result = { ...validateTranslation(parsed, provider), provider };
+  if (clientProtocol === 2) return result;
   return {
-    translation: parsed.translation,
-    detectedLanguage:
-      typeof parsed.detectedLanguage === "string" ? parsed.detectedLanguage : undefined,
-    segments,
+    ...result,
+    segments: [{ source: text, target: result.translation }],
   };
 }
 
@@ -391,7 +415,7 @@ function buildRun(adapter, model) {
       "read-only",
     ];
     if (model) args.push("--model", model);
-    args.push("--output-schema", OUTPUT_SCHEMA_PATH, "-");
+    args.push("--output-schema", RUNTIME_OUTPUT_SCHEMA_PATH, "-");
     return { args, mode: "direct" };
   }
   if (adapter.runner === "claude") {
@@ -428,7 +452,7 @@ function buildRun(adapter, model) {
     "--output-format",
     "json",
     "--json-schema",
-    OUTPUT_SCHEMA_PATH,
+    RUNTIME_OUTPUT_SCHEMA_PATH,
   ];
   if (model) args.push("--model", model);
   return { args, mode: "envelope" };
@@ -465,10 +489,14 @@ async function translateWithOllama(adapter, payload, model) {
     );
   }
   const parsed = findStructuredTranslation(result.message?.content);
-  if (!parsed) throw new Error("Ollama 没有返回有效的对齐翻译结果");
+  if (!parsed) throw new Error("Ollama 没有返回有效的翻译结果");
   return {
-    ...validateTranslation(parsed, payload.text, adapter.label),
-    provider: `${adapter.label} · ${model}`,
+    ...formatTranslationResponse(
+      parsed,
+      payload.text,
+      `${adapter.label} · ${model}`,
+      payload.clientProtocol,
+    ),
   };
 }
 
@@ -478,6 +506,7 @@ async function translate(payload) {
   const targetLanguage = typeof payload.targetLanguage === "string" ? payload.targetLanguage : "English";
   const tone = typeof payload.tone === "string" ? payload.tone : "自然";
   const model = typeof payload.model === "string" ? payload.model.trim() : "";
+  const clientProtocol = payload.clientProtocol === 2 ? 2 : 1;
   const adapter = getAdapter(normalizeProvider(payload.provider));
   if (!text.trim()) throw new Error("请输入要翻译的内容");
   if (text.length > MAX_TEXT_LENGTH) throw new Error(`输入不能超过 ${MAX_TEXT_LENGTH} 个字符`);
@@ -486,7 +515,7 @@ async function translate(payload) {
   if (adapter.runner === "ollama") {
     return translateWithOllama(
       adapter,
-      { text, sourceLanguage, targetLanguage, tone },
+      { text, sourceLanguage, targetLanguage, tone, clientProtocol },
       model,
     );
   }
@@ -515,10 +544,14 @@ async function translate(payload) {
     invocation.mode === "direct"
       ? parsedRoot
       : findStructuredTranslation(parsedRoot ?? result.stdout);
-  if (!parsed) throw new Error(`${adapter.label} 没有返回有效的对齐翻译结果`);
+  if (!parsed) throw new Error(`${adapter.label} 没有返回有效的翻译结果`);
   return {
-    ...validateTranslation(parsed, text, adapter.label),
-    provider: model ? `${adapter.label} · ${model}` : adapter.label,
+    ...formatTranslationResponse(
+      parsed,
+      text,
+      model ? `${adapter.label} · ${model}` : adapter.label,
+      clientProtocol,
+    ),
   };
 }
 
@@ -558,6 +591,12 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
+  if (NATIVE_LAUNCH) {
+    process.stdin.destroy();
+    process.stdout.destroy();
+    process.stderr.destroy();
+    return;
+  }
   console.log(`Jeffrey Type Transfer 多模型 CLI 桥接服务运行于 http://${HOST}:${PORT}`);
   console.log("支持 Codex、Claude Code、Gemini/Antigravity、Qwen Code、Ollama、GLM 与 DeepSeek 接入");
   console.log("按 Ctrl+C 停止服务");

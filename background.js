@@ -7,7 +7,6 @@ import {
   loadConfig,
   loadPageSelection,
   saveJobState,
-  saveLastComparison,
   savePageSelection,
 } from "./storage.js";
 import { translateText } from "./translate.js";
@@ -67,12 +66,6 @@ async function translateAndReplace(tabId) {
     });
     await replacePageSelection(selection, result.translation, resolvedTabId);
     await clearPageSelection();
-    await saveLastComparison({
-      ...result,
-      source: selection.text,
-      targetLanguage: config.targetLanguage,
-      createdAt: Date.now(),
-    });
     await saveJobState({
       status: "success",
       message: `已通过 ${result.provider} 翻译并替换页面选区`,

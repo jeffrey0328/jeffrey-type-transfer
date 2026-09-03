@@ -3,7 +3,6 @@
 import { DEFAULT_CONFIG } from "./app-config.js";
 
 export const CONFIG_KEY = "yuqiao.config.v1";
-export const LAST_COMPARISON_KEY = "yuqiao.lastComparison.v1";
 export const JOB_STATE_KEY = "yuqiao.jobState.v1";
 export const PAGE_SELECTION_KEY = "yuqiao.pageSelection.v1";
 
@@ -30,28 +29,6 @@ export async function saveConfig(config) {
     return;
   }
   localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-}
-
-export async function loadLastComparison() {
-  if (hasChromeStorage()) {
-    const stored = await chrome.storage.local.get(LAST_COMPARISON_KEY);
-    return stored[LAST_COMPARISON_KEY] ?? null;
-  }
-  const raw = localStorage.getItem(LAST_COMPARISON_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-export async function saveLastComparison(comparison) {
-  if (hasChromeStorage()) {
-    await chrome.storage.local.set({ [LAST_COMPARISON_KEY]: comparison });
-    return;
-  }
-  localStorage.setItem(LAST_COMPARISON_KEY, JSON.stringify(comparison));
 }
 
 export async function loadJobState() {

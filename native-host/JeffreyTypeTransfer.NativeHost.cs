@@ -121,24 +121,17 @@ namespace JeffreyTypeTransfer.NativeMessaging
                 string serverPath = Path.Combine(config.ProjectRoot, "bridge", "server.mjs");
                 ProcessStartInfo startInfo = new ProcessStartInfo();
                 startInfo.FileName = config.NodePath;
-                startInfo.Arguments = QuoteArgument(serverPath);
+                startInfo.Arguments = QuoteArgument(serverPath) + " --native-launch";
                 startInfo.WorkingDirectory = config.ProjectRoot;
-                startInfo.UseShellExecute = false;
+                startInfo.UseShellExecute = true;
                 startInfo.CreateNoWindow = true;
-                startInfo.RedirectStandardOutput = true;
-                startInfo.RedirectStandardError = true;
-                startInfo.EnvironmentVariables["YUQIAO_HOST"] = "127.0.0.1";
-                startInfo.EnvironmentVariables["YUQIAO_PORT"] = "8989";
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
 
                 child = Process.Start(startInfo);
                 if (child == null)
                 {
                     return Failure("bridge-launch-failed", "无法启动本地桥接进程");
                 }
-                child.OutputDataReceived += delegate { };
-                child.ErrorDataReceived += delegate { };
-                child.BeginOutputReadLine();
-                child.BeginErrorReadLine();
             }
             catch
             {

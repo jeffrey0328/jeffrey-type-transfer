@@ -15,7 +15,8 @@ The default connection is the local **Codex CLI**, so an existing ChatGPT/Codex 
 - Supports Claude Code, Gemini/Antigravity CLI, Qwen Code, Ollama, GLM Coding Plan, and DeepSeek-compatible connections
 - Optionally supports Responses API and compatible Chat Completions services
 - Replaces the selected page text through the side panel, context menu, or `Alt + Shift + T`
-- Keeps the latest bilingual comparison and highlights aligned translated segments when source text is selected
+- Checks the saved AI connection when the side panel opens and keeps setup locked until the connection is ready
+- Switches between translation and setup with a horizontal card transition
 - Provides both written setup instructions and a ready-to-use Agent configuration prompt
 
 ## Quick Start: Codex CLI
@@ -93,6 +94,8 @@ powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId 
 3. Reload the unpacked extension, open **Connection & Settings**, and select **One-click start**.
 
 The installer uses per-user Chrome/Edge registry entries and does not require administrator privileges. It compiles a small native host from the source in this repository. The host only accepts a fixed `start` action, launches this project's `bridge/server.mjs`, and forces `127.0.0.1:8989`. It does not read Codex credentials and cannot accept arbitrary commands, paths, hosts, or ports from the extension.
+The installer also records model CLI executable paths visible in the current terminal so a browser-launched bridge does not lose them with a different `PATH`. Run the registration command again if a CLI upgrade moves its executable.
+If a regular PowerShell session cannot resolve `codex`, run `powershell -ExecutionPolicy Bypass -File .\native-host\codex-login.ps1` from the project root; the helper uses the executable path captured during registration.
 
 To remove the registration:
 
@@ -186,9 +189,8 @@ Both modes use Claude Code as the non-interactive CLI shell. Configure the provi
 2. Open the jeffrey-type-transfer side panel and wait for **Selection locked**.
 3. Choose the target language and tone.
 4. Click **Translate and replace selected text**, or press `Alt + Shift + T`.
-5. Select part of the source text in the bilingual comparison to highlight the aligned translation.
 
-The extension continuously stores the last valid editable selection in the page and its frames, so opening the side panel does not lose it. It handles inputs for which the browser exposes text selection, ordinary textareas, `contenteditable`, and `designMode` editors. Password fields are always excluded. Canvas editors such as Google Docs, closed shadow roots, and editors whose state is fully detached from the DOM can still prevent in-place replacement.
+The extension continuously stores the last valid editable selection in the page and its frames, so opening the side panel does not lose it. Selection translation handles inputs for which the browser exposes text selection, ordinary textareas, `contenteditable`, and `designMode` editors. Password fields are always excluded. Canvas editors such as Google Docs, closed shadow roots, and editors whose state is fully detached from the DOM can still prevent in-place replacement.
 
 ## Optional API-Key Mode
 
@@ -217,7 +219,7 @@ codex exec --ephemeral --skip-git-repo-check --sandbox read-only --output-schema
 
 Claude Code uses `claude -p --output-format json --json-schema ... --tools ""`; Antigravity uses `agy -p --output-format json --json-schema ...`; Qwen Code uses stdin, safe mode, a zero ordinary-tool budget, and JSON Schema; Ollama uses structured output through the local `/api/chat` endpoint.
 
-Prompts are passed without a shell. Structured output contains both the complete translation and aligned semantic segments. The service exposes only `/health` and `/translate`, allows at most two concurrent translation jobs, and limits request and source-text sizes.
+Prompts are passed without a shell. Structured output contains the complete translation. The service exposes only `/health` and `/translate`, allows at most two concurrent translation jobs, and limits request and source-text sizes.
 
 ## Development
 
@@ -228,7 +230,7 @@ npm run check     # Check manifest, runtime files, and JavaScript syntax
 npm test          # Run Node.js unit tests
 ```
 
-The ordinary web preview can verify the side-panel interface and bilingual highlighting. Context menus, shortcuts, page-selection capture, and in-place replacement must be tested with the project root loaded as an unpacked extension in Chrome or Edge. After source changes, reload the extension without building. Open `http://127.0.0.1:5173/?empty=1` to preview the disabled no-selection state.
+The ordinary web preview can verify the side-panel interface and its selection states. Context menus, shortcuts, page-selection capture, and in-place replacement must be tested with the project root loaded as an unpacked extension in Chrome or Edge. After source changes, reload the extension without building. Open `http://127.0.0.1:5173/?empty=1` to preview the disabled no-selection state.
 
 ## Project Structure
 

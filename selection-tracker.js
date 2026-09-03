@@ -112,4 +112,5 @@
   for (const eventName of ["selectionchange", "select", "focusin", "pointerup", "keyup", "input"]) {
     document.addEventListener(eventName, schedulePublish, true);
   }
+
 })();

@@ -14,6 +14,7 @@ const requiredFiles = [
   "selection-tracker.js",
   "native-bridge.js",
   "native-host/JeffreyTypeTransfer.NativeHost.cs",
+  "native-host/codex-login.ps1",
   "native-host/install.ps1",
   "native-host/uninstall.ps1",
 ];

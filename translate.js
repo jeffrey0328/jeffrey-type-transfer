@@ -28,48 +28,23 @@ export function translationInstructions(request) {
     `Translate from ${source} to ${request.targetLanguage}.`,
     `Tone: ${request.tone}.`,
     "Preserve meaning, names, numbers, formatting, paragraph breaks, and Markdown when present.",
-    "Split the source and translation into short, semantically aligned segments in original order.",
-    "Every source character must appear exactly once across the source segments, including punctuation and whitespace.",
     "Return only valid JSON with this shape:",
-    '{"detectedLanguage":"language name","translation":"complete translated text","segments":[{"source":"source segment","target":"matching translated segment"}]}',
+    '{"translation":"complete translated text"}',
     "Do not use Markdown fences and do not add commentary.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
-export function parseAlignedTranslation(raw, source, provider) {
+export function parseTranslation(raw, provider) {
   const cleaned = String(raw).trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   try {
     const parsed = JSON.parse(cleaned);
-    const segments = Array.isArray(parsed.segments)
-      ? parsed.segments.flatMap((segment) =>
-          typeof segment.source === "string" && typeof segment.target === "string"
-            ? [{ source: segment.source, target: segment.target }]
-            : [],
-        )
-      : [];
-    const translation = typeof parsed.translation === "string"
-      ? parsed.translation
-      : segments.map((segment) => segment.target).join("");
-    if (translation && segments.length > 0) {
-      return {
-        translation,
-        detectedLanguage:
-          typeof parsed.detectedLanguage === "string" ? parsed.detectedLanguage : undefined,
-        provider,
-        segments:
-          segments.map((segment) => segment.source).join("") === source
-            ? segments
-            : [{ source, target: translation }],
-      };
+    if (typeof parsed.translation === "string" && parsed.translation) {
+      return { translation: parsed.translation, provider };
     }
   } catch {
     // Compatible providers may ignore the requested JSON envelope.
   }
-  return {
-    translation: cleaned,
-    provider,
-    segments: [{ source, target: cleaned }],
-  };
+  return { translation: cleaned, provider };
 }
 
 async function translateWithApi(config, request) {
@@ -101,7 +76,7 @@ async function translateWithApi(config, request) {
   const payload = await response.json();
   const raw = isResponses ? extractResponsesText(payload) : extractChatText(payload);
   if (!raw) throw new Error("API 返回了空结果");
-  return parseAlignedTranslation(raw, request.text, `API · ${config.apiModel}`);
+  return parseTranslation(raw, `API · ${config.apiModel}`);
 }
 
 export async function translateText(config, request) {
@@ -111,6 +86,7 @@ export async function translateText(config, request) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         ...request,
+        clientProtocol: 2,
         provider: config.cliProvider,
         model: config.cliModel.trim() || undefined,
       }),
@@ -124,6 +100,27 @@ export async function translateText(config, request) {
   if (!config.apiKey.trim()) throw new Error("请先在连接设置中填写 API Key");
   if (!config.apiModel.trim()) throw new Error("请先填写 API 模型名称");
   return translateWithApi(config, request);
+}
+
+export async function checkApiConnection(config) {
+  const baseUrl = normalizeBaseUrl(config.apiBaseUrl);
+  const model = String(config.apiModel).trim();
+  const apiKey = String(config.apiKey).trim();
+  if (!baseUrl || !model || !apiKey) throw new Error("请完整填写 API 地址、模型名称和 API Key");
+  let response;
+  try {
+    response = await fetch(`${baseUrl}/models/${encodeURIComponent(model)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch {
+    throw new Error("无法连接 API 服务，请检查地址和网络");
+  }
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`API 连接检测失败 (${response.status})：${detail.slice(0, 180)}`);
+  }
+  return { ok: true, statusMessage: `API 已连接 · ${model}` };
 }
 
 export async function checkBridge(bridgeUrl, provider = "codex") {

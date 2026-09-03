@@ -64,6 +64,9 @@ test("Windows 注册脚本只使用当前用户注册表并固定允许的扩展
   assert.match(source, /HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts/);
   assert.match(source, /HKCU:\\Software\\Microsoft\\Edge\\NativeMessagingHosts/);
   assert.match(source, /chrome-extension:\/\/\$ExtensionId\//);
+  assert.match(source, /cliPaths = \[ordered\]@\{/);
+  assert.match(source, /Get-Command \$Name -CommandType Application/);
+  assert.match(source, /Native Messaging 注册校验失败/);
   assert.doesNotMatch(source, /HKLM:/);
 });
 
@@ -73,7 +76,71 @@ test("本机宿主固定回环地址和端口，且不接受外部命令路径",
     "utf8",
   );
   assert.match(source, /127\.0\.0\.1:8989/);
-  assert.match(source, /\[\"YUQIAO_HOST"\] = "127\.0\.0\.1"/);
-  assert.match(source, /\[\"YUQIAO_PORT"\] = "8989"/);
+  assert.match(source, /QuoteArgument\(serverPath\) \+ " --native-launch"/);
+  assert.match(source, /UseShellExecute = true/);
+  assert.match(source, /WindowStyle = ProcessWindowStyle\.Hidden/);
+  assert.doesNotMatch(source, /RedirectStandard(Output|Error) = true/);
   assert.doesNotMatch(source, /request\.(Path|Command|Arguments)/);
+});
+
+test("本机启动时桥接不保留 Native Messaging 标准流", async () => {
+  const source = await readFile(new URL("../bridge/server.mjs", import.meta.url), "utf8");
+  assert.match(source, /process\.argv\.includes\("--native-launch"\)/);
+  assert.match(source, /NATIVE_LAUNCH \? "127\.0\.0\.1"/);
+  assert.match(source, /NATIVE_LAUNCH \? 8989/);
+  assert.match(source, /process\.stdin\.destroy\(\)/);
+  assert.match(source, /process\.stdout\.destroy\(\)/);
+  assert.match(source, /process\.stderr\.destroy\(\)/);
+  assert.match(source, /NATIVE_CLI_PATHS\.codex/);
+  assert.match(source, /jeffrey-type-transfer-schema-\$\{process\.pid\}\.json/);
+  assert.match(source, /--output-schema", RUNTIME_OUTPUT_SCHEMA_PATH/);
+});
+
+test("新旧侧栏都能接收精简后的翻译结果", async () => {
+  const [bridge, client] = await Promise.all([
+    readFile(new URL("../bridge/server.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../translate.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(client, /clientProtocol: 2/);
+  assert.match(bridge, /if \(clientProtocol === 2\) return result/);
+  assert.match(bridge, /segments: \[\{ source: text, target: result\.translation \}\]/);
+});
+
+test("复制注册命令后保留首次使用展开状态", async () => {
+  const source = await readFile(new URL("../sidepanel.js", import.meta.url), "utf8");
+  assert.match(source, /nativeSetupOpen: false/);
+  assert.match(source, /state\.nativeSetupOpen \? "open" : ""/);
+  assert.match(source, /state\.nativeSetupOpen = event\.currentTarget\.open/);
+});
+
+test("Codex 登录助手使用注册时记录的 CLI 路径", async () => {
+  const [script, config] = await Promise.all([
+    readFile(new URL("../native-host/codex-login.ps1", import.meta.url), "utf8"),
+    readFile(new URL("../app-config.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(script, /host-config\.json/);
+  assert.match(script, /\$config\.cliPaths\.codex/);
+  assert.doesNotMatch(script, /auth\.json|API[_ ]?Key/i);
+  assert.match(config, /native-host\\\\codex-login\.ps1/);
+});
+
+test("AI 未连接时配置页会阻止返回翻译并使用滑动切换", async () => {
+  const source = await readFile(new URL("../sidepanel.js", import.meta.url), "utf8");
+  assert.match(source, /state\.view = isConnectionReady\(config\) \? "translator" : "settings"/);
+  assert.match(source, /nextView === "translator" && !isConnectionReady\(\)/);
+  assert.match(source, /outgoing\.animate\(/);
+  assert.match(source, /incoming\.animate\(/);
+  assert.match(source, /连接成功后即可返回翻译/);
+});
+
+test("主流程只保留选中翻译", async () => {
+  const sources = await Promise.all([
+    readFile(new URL("../app-config.js", import.meta.url), "utf8"),
+    readFile(new URL("../selection-tracker.js", import.meta.url), "utf8"),
+    readFile(new URL("../sidepanel.js", import.meta.url), "utf8"),
+    readFile(new URL("../sidepanel.css", import.meta.url), "utf8"),
+  ]);
+  const runtime = sources.join("\n");
+  assert.doesNotMatch(runtime, /liveTranslation|yuqiao-live|实时翻译/);
+  assert.match(runtime, /翻译并替换选中内容/);
 });

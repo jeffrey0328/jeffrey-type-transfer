@@ -13,7 +13,8 @@ jeffrey-type-transfer 是一个 Chromium MV3 侧边栏翻译扩展。它可以�
 - 可切换 Claude Code、Gemini/Antigravity CLI、Qwen Code、Ollama、GLM Coding Plan 和 DeepSeek 兼容接入
 - 可选接入 Responses API 或兼容 Chat Completions 的模型服务
 - 点击“翻译并替换选中内容”、右键菜单或 `Alt + Shift + T`，都会直接原位替换页面选区
-- 侧边栏保留最近一次双语对照；选中原文片段时，对应译文会联动高亮
+- 打开侧边栏时自动检测已保存的 AI 连接，未就绪时锁定在配置页
+- 翻译主页与配置页使用横向滑动卡片过渡
 - CLI 与 API Key 各自提供“文字说明”和“Agent 提示词”两种配置引导
 
 ## 快速开始：默认 Codex CLI
@@ -91,6 +92,8 @@ powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId 
 3. 在扩展管理页重新加载扩展，然后进入“连接与设置”，点击“一键启动”。
 
 注册脚本使用当前用户的 Chrome/Edge 注册表项，不需要管理员权限；它会从本项目源码编译一个小型本机宿主。宿主只接受固定的 `start` 指令，只启动当前项目的 `bridge/server.mjs`，并强制监听 `127.0.0.1:8989`。它不会读取 Codex 凭据，也不会接受扩展传入的任意命令、路径、地址或端口。
+注册时还会记录当前终端能找到的模型 CLI 程序路径，避免从浏览器后台启动时丢失 `PATH`。如果 CLI 升级后安装路径改变，重新运行一次注册命令即可。
+如果普通 PowerShell 提示无法识别 `codex`，可在项目根目录运行 `powershell -ExecutionPolicy Bypass -File .\native-host\codex-login.ps1`；该脚本会使用上述已记录的程序路径。
 
 如需移除注册：
 
@@ -184,9 +187,7 @@ npm run bridge
 2. 打开 jeffrey-type-transfer 侧边栏。看到“已锁定选区”后，选择目标语言和语气。
 3. 点击“翻译并替换选中内容”，或直接按 `Alt + Shift + T`。
 4. 插件会确认原文没有被改动，再将译文原位替换到同一个输入框中。
-5. 在侧边栏的双语对照里拖选原文片段，可以查看对应的译文高亮。
-
-扩展会在网页和各级 iframe 中持续记录最后一次有效选区，因此打开侧边栏造成页面失焦后仍能识别。它处理浏览器支持文本选区的 `input`、普通 `textarea`、`contenteditable` 和 `designMode` 编辑区；密码框始终排除。Google Docs 画布、封闭 Shadow DOM，以及内部状态与 DOM 完全分离的少数编辑器受浏览器扩展能力限制，仍可能无法原位替换。
+扩展会在网页和各级 iframe 中持续记录最后一次有效选区，因此打开侧边栏造成页面失焦后仍能识别。选区翻译支持浏览器可获取文本选区的 `input`、普通 `textarea`、`contenteditable` 和 `designMode` 编辑区；密码框始终排除。Google Docs 画布、封闭 Shadow DOM，以及内部状态与 DOM 完全分离的少数编辑器受浏览器扩展能力限制，仍可能无法原位替换。
 
 ## 可选：API Key 模式
 
@@ -213,7 +214,7 @@ Codex 默认适配器使用非交互模式：
 codex exec --ephemeral --skip-git-repo-check --sandbox read-only --output-schema bridge/translation-schema.json -
 ```
 
-Claude Code 使用 `claude -p --output-format json --json-schema ... --tools ""`；Antigravity 使用 `agy -p --output-format json --json-schema ...`；Qwen Code 使用 stdin、safe mode、零工具调用和 JSON Schema；Ollama 使用本机 `/api/chat` structured output。翻译提示词不经过 shell。结构化输出会同时返回完整译文和语义对齐片段，供侧边栏联动高亮。服务不接受任意命令，只开放 `/health` 和 `/translate` 两个接口；最多并发两个翻译任务，并限制请求体和文本长度。
+Claude Code 使用 `claude -p --output-format json --json-schema ... --tools ""`；Antigravity 使用 `agy -p --output-format json --json-schema ...`；Qwen Code 使用 stdin、safe mode、零工具调用和 JSON Schema；Ollama 使用本机 `/api/chat` structured output。翻译提示词不经过 shell。结构化输出只返回完整译文。服务不接受任意命令，只开放 `/health` 和 `/translate` 两个接口；最多并发两个翻译任务，并限制请求体和文本长度。
 
 ## 开发命令
 

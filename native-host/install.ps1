@@ -34,6 +34,13 @@ $compilerCandidates = @(
 $compilerPath = $compilerCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $compilerPath) { throw '未找到 Windows .NET Framework C# 编译器，无法生成本机宿主。' }
 
+function Resolve-ApplicationPath([string]$Name) {
+  $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if ($null -eq $command) { return $null }
+  return $command.Source
+}
+
 New-Item -ItemType Directory -Force -Path $binPath | Out-Null
 & $compilerPath /nologo /target:exe /platform:anycpu "/out:$executablePath" /reference:System.Runtime.Serialization.dll $sourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $executablePath)) {
@@ -44,7 +51,14 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $config = [ordered]@{
   nodePath = $nodeCommand.Source
   projectRoot = $projectRoot
-} | ConvertTo-Json
+  cliPaths = [ordered]@{
+    codex = Resolve-ApplicationPath 'codex'
+    claude = Resolve-ApplicationPath 'claude'
+    agy = Resolve-ApplicationPath 'agy'
+    qwen = Resolve-ApplicationPath 'qwen'
+    ollama = Resolve-ApplicationPath 'ollama'
+  }
+} | ConvertTo-Json -Depth 3
 [System.IO.File]::WriteAllText($configPath, $config, $utf8NoBom)
 
 $manifest = [ordered]@{
@@ -69,6 +83,10 @@ if (-not $SkipRegistration) {
     if ($PSCmdlet.ShouldProcess($registryPath, '注册 Native Messaging 宿主')) {
       New-Item -Path $registryPath -Force | Out-Null
       Set-Item -Path $registryPath -Value $manifestPath
+      $registeredManifest = (Get-Item -LiteralPath $registryPath).GetValue('')
+      if ($registeredManifest -ne $manifestPath) {
+        throw "Native Messaging 注册校验失败：$registryPath"
+      }
     }
   }
 }

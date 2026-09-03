@@ -11,18 +11,15 @@ import {
 import { capturePageSelection, replacePageSelection } from "./page-selection.js";
 import {
   JOB_STATE_KEY,
-  LAST_COMPARISON_KEY,
   PAGE_SELECTION_KEY,
   clearPageSelection,
   loadConfig,
   loadJobState,
-  loadLastComparison,
   loadPageSelection,
   saveConfig,
-  saveLastComparison,
   savePageSelection,
 } from "./storage.js";
-import { checkBridge, translateText } from "./translate.js";
+import { checkApiConnection, checkBridge, translateText } from "./translate.js";
 import { NATIVE_BRIDGE_START_MESSAGE } from "./native-bridge.js";
 
 const root = document.querySelector("#root");
@@ -30,6 +27,8 @@ const extensionRuntime =
   typeof chrome !== "undefined" && Boolean(chrome.scripting && chrome.storage?.local);
 const previewEmpty =
   !extensionRuntime && new URLSearchParams(window.location.search).has("empty");
+const previewConnectionState =
+  !extensionRuntime ? new URLSearchParams(window.location.search).get("connection") : null;
 
 const DEMO_SOURCE = "把想法带到任何语言里，让沟通更自然。";
 const DEMO_SELECTION = {
@@ -39,36 +38,29 @@ const DEMO_SELECTION = {
   end: DEMO_SOURCE.length,
   elementName: "textarea",
 };
-const DEMO_COMPARISON = {
-  source: DEMO_SOURCE,
-  translation: "Carry your ideas into any language, and make communication feel natural.",
-  detectedLanguage: "简体中文",
-  targetLanguage: "English",
-  provider: "Codex CLI",
-  createdAt: Date.now(),
-  segments: [
-    { source: "把想法带到任何语言里，", target: "Carry your ideas into any language," },
-    { source: "让沟通更自然。", target: "and make communication feel natural." },
-  ],
-};
-
 const state = {
   view: "translator",
   config: { ...DEFAULT_CONFIG },
   draft: { ...DEFAULT_CONFIG },
   bridgeConnected: false,
+  bridgeReachable: false,
+  bridgeMessage: "",
+  bridgeCheckKey: "",
+  apiConnected: false,
+  apiCheckKey: "",
+  apiMessage: "",
   pageSelection: extensionRuntime || previewEmpty ? null : DEMO_SELECTION,
-  comparison: extensionRuntime ? null : DEMO_COMPARISON,
   jobState: null,
-  activeSegments: new Set(),
   isPending: false,
   guideTab: "text",
   advancedOpen: false,
   checking: false,
   saving: false,
   bridgeStarting: false,
+  nativeSetupOpen: false,
   notice: "",
   copied: "",
+  transitioning: false,
 };
 
 const GLYPHS = {
@@ -78,8 +70,6 @@ const GLYPHS = {
   check: "✓",
   pointer: "⌁",
   sparkle: "✦",
-  columns: "▥",
-  language: "文",
   terminal: ">_",
   key: "◆",
   server: "◎",
@@ -113,17 +103,74 @@ function optionMarkup(items, selected) {
   ).join("");
 }
 
+function cliConnectionKey(config) {
+  return `${String(config.bridgeUrl).trim()}\n${config.cliProvider}`;
+}
+
+function apiConnectionKey(config) {
+  return `${String(config.apiBaseUrl).trim()}\n${String(config.apiModel).trim()}\n${String(config.apiKey).trim()}`;
+}
+
+function isConnectionReady(config = state.config) {
+  if (config.mode === "api") {
+    return state.apiConnected && state.apiCheckKey === apiConnectionKey(config);
+  }
+  return state.bridgeConnected && state.bridgeCheckKey === cliConnectionKey(config);
+}
+
+function connectionGateMessage(config = state.config) {
+  if (config.mode === "api") {
+    return state.apiMessage || "请完整填写 API 配置并点击“保存并检测”。";
+  }
+  return state.bridgeMessage || `请先启动桥接并确认 ${getCliProviderMeta(config.cliProvider).shortLabel} 已就绪。`;
+}
+
+async function switchView(nextView) {
+  if (state.transitioning || nextView === state.view) return;
+  if (nextView === "translator" && !isConnectionReady()) {
+    state.notice = connectionGateMessage();
+    renderSettings();
+    return;
+  }
+  state.transitioning = true;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const outgoing = root.querySelector(".app-shell");
+  const exitX = nextView === "settings" ? -56 : 56;
+  if (outgoing && !reduceMotion) {
+    await outgoing.animate(
+      [
+        { opacity: 1, transform: "translateX(0) scale(1)" },
+        { opacity: 0, transform: `translateX(${exitX}px) scale(0.985)` },
+      ],
+      { duration: 150, easing: "cubic-bezier(.4, 0, 1, 1)", fill: "forwards" },
+    ).finished.catch(() => undefined);
+  }
+  state.view = nextView;
+  if (nextView === "settings") renderSettings();
+  else renderTranslator();
+  const incoming = root.querySelector(".app-shell");
+  if (incoming && !reduceMotion) {
+    await incoming.animate(
+      [
+        { opacity: 0, transform: `translateX(${-exitX}px) scale(0.985)` },
+        { opacity: 1, transform: "translateX(0) scale(1)" },
+      ],
+      { duration: 220, easing: "cubic-bezier(.16, 1, .3, 1)" },
+    ).finished.catch(() => undefined);
+  }
+  state.transitioning = false;
+}
+
 function renderTranslator() {
   const config = state.config;
   const provider = getCliProviderMeta(config.cliProvider);
-  const connected = config.mode === "api"
-    ? Boolean(config.apiKey && config.apiModel)
-    : state.bridgeConnected;
+  const connected = isConnectionReady(config);
   const connectionLabel = config.mode === "api"
     ? (config.apiKey ? `API · ${config.apiModel}` : "API Key · 待配置")
     : `${provider.shortLabel} · ${connected ? "已连接" : "未连接"}`;
   const selection = state.pageSelection;
-  const controlsDisabled = !selection || state.isPending;
+  const optionControlsDisabled = state.isPending;
+  const translateDisabled = !selection || state.isPending;
   const selectionMarkup = selection
     ? `<div class="selection-card is-active">
         <div class="selection-meta">
@@ -136,12 +183,6 @@ function renderTranslator() {
         ${icon("pointer")}
         <div><strong>尚未选中可翻译的文字</strong><p>请先在网页输入框、文本框或可编辑区域中拖选文字。</p></div>
       </div>`;
-  const comparisonMarkup = state.comparison ? renderComparison(state.comparison) : `
-    <div class="comparison-empty">
-      ${icon("language")}
-      <strong>还没有对照结果</strong>
-      <span>完成一次翻译后，这里会保留最近一次原文与译文。</span>
-    </div>`;
   const jobMessage = state.jobState?.message || "选区发生变化时，目标语言与翻译按钮会自动切换状态。";
 
   root.innerHTML = `<main class="app-shell translator-shell">
@@ -163,42 +204,18 @@ function renderTranslator() {
       </div>
       ${selectionMarkup}
       <div class="selection-controls">
-        <label><span>目标语言</span><select id="target-language" ${controlsDisabled ? "disabled" : ""}>${optionMarkup(LANGUAGES, config.targetLanguage)}</select></label>
-        <label><span>语气</span><select id="tone" ${controlsDisabled ? "disabled" : ""}>${optionMarkup(["自然", "正式", "简洁", "口语"].map((value) => ({ value, label: value })), config.tone)}</select></label>
+        <label><span>目标语言</span><select id="target-language" ${optionControlsDisabled ? "disabled" : ""}>${optionMarkup(LANGUAGES, config.targetLanguage)}</select></label>
+        <label><span>语气</span><select id="tone" ${optionControlsDisabled ? "disabled" : ""}>${optionMarkup(["自然", "正式", "简洁", "口语"].map((value) => ({ value, label: value })), config.tone)}</select></label>
       </div>
-      <button class="primary-button translate-replace-button" id="translate" ${controlsDisabled ? "disabled" : ""}>
-        ${icon(state.isPending ? "refresh" : "sparkle", state.isPending ? "spin" : "")}
-        ${state.isPending ? "正在翻译并替换…" : "翻译并替换选中内容"}
-      </button>
-      <div class="shortcut-row"><span>也可以直接按</span><kbd>Alt</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>T</kbd></div>
+      <button class="primary-button translate-replace-button" id="translate" ${translateDisabled ? "disabled" : ""}>
+          ${icon(state.isPending ? "refresh" : "sparkle", state.isPending ? "spin" : "")}
+          ${state.isPending ? "正在翻译并替换…" : "翻译并替换选中内容"}
+        </button>
+        <div class="shortcut-row"><span>也可以直接按</span><kbd>Alt</kbd><span>+</span><kbd>Shift</kbd><span>+</span><kbd>T</kbd></div>
       <div class="inline-message ${state.jobState?.status === "error" ? "is-error" : ""}" aria-live="polite">${escapeHtml(jobMessage)}</div>
-    </section>
-
-    <section class="comparison-section" aria-labelledby="comparison-heading">
-      <div class="section-heading comparison-heading">
-        <span class="section-heading-icon mint">${icon("columns")}</span>
-        <div><span>语义对齐</span><h2 id="comparison-heading">中英文对照</h2></div>
-      </div>
-      <p class="comparison-help">在左侧原文中选中一部分，右侧对应译文会同步高亮。</p>
-      ${comparisonMarkup}
     </section>
   </main>`;
   attachTranslatorEvents();
-}
-
-function renderComparison(comparison) {
-  const rows = comparison.segments.map((segment, index) => {
-    const active = state.activeSegments.has(index) ? "is-highlighted" : "";
-    return `<div class="alignment-row">
-      <div role="button" tabindex="0" class="segment-cell segment-source ${active}" data-source-index="${index}">${escapeHtml(segment.source)}</div>
-      <div class="segment-cell segment-target ${active}" data-target-index="${index}">${escapeHtml(segment.target)}</div>
-    </div>`;
-  }).join("");
-  return `<div class="comparison-board">
-    <div class="comparison-labels"><span>${escapeHtml(comparison.detectedLanguage || "原文")}</span><span>${escapeHtml(comparison.targetLanguage)}</span></div>
-    <div class="alignment-list">${rows}</div>
-    <div class="comparison-foot">${icon("language")}${escapeHtml(comparison.provider)} · 已完成语义分段</div>
-  </div>`;
 }
 
 function attachTranslatorEvents() {
@@ -214,42 +231,6 @@ function attachTranslatorEvents() {
     state.config.tone = event.target.value;
     void saveConfig(state.config);
   });
-  const list = document.querySelector(".alignment-list");
-  list?.addEventListener("mouseup", handleSourceSelection);
-  list?.querySelectorAll(".segment-source").forEach((cell) => {
-    cell.addEventListener("click", () => {
-      if (window.getSelection()?.isCollapsed !== false) {
-        setActiveSegments(new Set([Number(cell.dataset.sourceIndex)]));
-      }
-    });
-    cell.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        setActiveSegments(new Set([Number(cell.dataset.sourceIndex)]));
-      }
-    });
-  });
-}
-
-function setActiveSegments(indexes) {
-  state.activeSegments = indexes;
-  document.querySelectorAll("[data-source-index], [data-target-index]").forEach((cell) => {
-    const index = Number(cell.dataset.sourceIndex ?? cell.dataset.targetIndex);
-    cell.classList.toggle("is-highlighted", indexes.has(index));
-  });
-}
-
-function handleSourceSelection(event) {
-  const selected = window.getSelection();
-  if (!selected || selected.isCollapsed || selected.rangeCount === 0) {
-    setActiveSegments(new Set());
-    return;
-  }
-  const range = selected.getRangeAt(0);
-  const indexes = Array.from(event.currentTarget.querySelectorAll("[data-source-index]"))
-    .filter((node) => range.intersectsNode(node))
-    .map((node) => Number(node.dataset.sourceIndex));
-  setActiveSegments(new Set(indexes));
 }
 
 async function refreshSelection() {
@@ -297,18 +278,13 @@ async function handleTranslate() {
           targetLanguage: state.config.targetLanguage,
           tone: state.config.tone,
         })
-      : DEMO_COMPARISON;
+      : {
+          translation: "Carry your ideas into any language, and make communication feel natural.",
+          provider: "Codex CLI",
+        };
     await replacePageSelection(selection, result.translation);
     if (extensionRuntime) await clearPageSelection();
-    state.comparison = {
-      ...result,
-      source: selection.text,
-      targetLanguage: state.config.targetLanguage,
-      createdAt: Date.now(),
-    };
-    if (extensionRuntime) await saveLastComparison(state.comparison);
     state.pageSelection = extensionRuntime ? null : DEMO_SELECTION;
-    state.activeSegments = new Set();
     state.jobState = { status: "success", message: `已通过 ${result.provider} 翻译并替换页面选区`, createdAt: Date.now() };
   } catch (error) {
     state.jobState = { status: "error", message: error instanceof Error ? error.message : "翻译失败，请检查连接设置", createdAt: Date.now() };
@@ -319,10 +295,9 @@ async function handleTranslate() {
 }
 
 function openSettings() {
-  state.view = "settings";
   state.draft = { ...state.config };
   state.notice = "";
-  renderSettings();
+  void switchView("settings");
 }
 
 function renderSettings() {
@@ -340,13 +315,16 @@ function renderSettings() {
       </div>`
     : mode === "cli" ? renderGuideSteps(guide.steps) : renderApiGuide();
   const noticeError = ["失败", "无法", "未", "请"].some((word) => state.notice.includes(word));
+  const translatorReady = isConnectionReady();
+  const gateMessage = connectionGateMessage(draft);
 
   root.innerHTML = `<main class="app-shell settings-shell">
     <header class="settings-header">
-      <button class="icon-button back-settings" aria-label="返回翻译">${icon("back")}</button>
+      <button class="icon-button back-settings" aria-label="返回翻译" ${translatorReady ? "" : "disabled"}>${icon("back")}</button>
       <h1>连接与设置</h1>
-      <button class="icon-button back-settings" aria-label="关闭设置">${icon("close")}</button>
+      <button class="icon-button back-settings" aria-label="关闭设置" ${translatorReady ? "" : "disabled"}>${icon("close")}</button>
     </header>
+    ${translatorReady ? "" : `<div class="connection-gate-banner" role="status">${icon("shield")}<div><strong>请先完成 AI 连接</strong><span>${escapeHtml(gateMessage)}</span></div></div>`}
     <div class="mode-switch" role="tablist" aria-label="模型连接方式">
       <button role="tab" aria-selected="${mode === "cli"}" class="${mode === "cli" ? "is-active" : ""}" data-mode="cli">${icon("terminal")}本地 CLI<span class="recommended-tag">默认</span></button>
       <button role="tab" aria-selected="${mode === "api"}" class="${mode === "api" ? "is-active" : ""}" data-mode="api">${icon("key")}API Key</button>
@@ -360,8 +338,8 @@ function renderSettings() {
       <h2 id="guide-heading" class="sr-only">配置引导</h2>${guideContent}
     </section>
     <div class="settings-actions">
-      <button class="primary-button" id="save-settings" ${state.saving ? "disabled" : ""}>${icon(state.saving ? "refresh" : "save", state.saving ? "spin" : "")}${state.saving ? "正在保存" : "保存设置"}</button>
-      <button class="text-link-button back-settings">返回翻译 ${icon("external")}</button>
+      <button class="primary-button" id="save-settings" ${state.saving ? "disabled" : ""}>${icon(state.saving ? "refresh" : "save", state.saving ? "spin" : "")}${state.saving ? "正在检测" : "保存并检测"}</button>
+      <button class="text-link-button back-settings" ${translatorReady ? "" : "disabled"}>${translatorReady ? `返回翻译 ${icon("external")}` : "连接成功后即可返回翻译"}</button>
     </div>
     <div class="settings-notice ${noticeError ? "is-error" : ""}" aria-live="polite">${escapeHtml(state.notice || "API Key 模式完全可选；默认仍推荐 Codex CLI。")}</div>
   </main>`;
@@ -385,20 +363,27 @@ function renderCliSettings(draft, provider, guide, advancedVisible) {
   const nativeStartSupported = isDefaultBridgeUrl(draft.bridgeUrl);
   const extensionId = extensionRuntime ? chrome.runtime.id : "<扩展 ID>";
   const installCommand = `powershell -ExecutionPolicy Bypass -File .\\native-host\\install.ps1 -ExtensionId ${extensionId} -Browser Both`;
+  const bridgeStateClass = state.bridgeConnected
+    ? "is-online"
+    : state.bridgeReachable ? "is-warning" : "is-offline";
+  const bridgeStateLabel = state.bridgeConnected
+    ? "已就绪"
+    : state.bridgeReachable ? "桥接在线" : "未连接";
   return `<section class="connection-section" aria-labelledby="cli-status-heading">
     <div class="section-title-row"><div><span class="section-icon">${icon("terminal")}</span><h2 id="cli-status-heading">${escapeHtml(provider.label)}</h2></div>
-      <span class="connection-label ${state.bridgeConnected ? "is-online" : "is-offline"}"><span class="status-dot"></span>${state.bridgeConnected ? "已连接" : "未连接"}</span></div>
+      <span class="connection-label ${bridgeStateClass}"><span class="status-dot"></span>${bridgeStateLabel}</span></div>
     <label class="form-field cli-provider-field"><span>CLI / 模型服务</span><select id="cli-provider">${optionMarkup(providerOptions, draft.cliProvider)}</select><small class="provider-summary">${escapeHtml(guide.summary)}</small></label>
     <label class="form-field"><span>本地桥接地址</span><div class="inline-input-button"><input id="bridge-url" value="${escapeHtml(draft.bridgeUrl)}" spellcheck="false" />
       <button class="secondary-button" id="check-bridge" ${state.checking ? "disabled" : ""}>${icon(state.checking ? "refresh" : "server", state.checking ? "spin" : "")}${state.checking ? "检测中" : "检测连接"}</button></div></label>
     <div class="native-bridge-launcher">
       <div class="native-bridge-heading"><div><strong>本机桥接助手</strong><span>无需保持终端窗口</span></div>
-        <button class="secondary-button native-start-button" id="start-native-bridge" ${!extensionRuntime || !nativeStartSupported || state.bridgeStarting || state.bridgeConnected ? "disabled" : ""}>
-          ${icon(state.bridgeStarting ? "refresh" : state.bridgeConnected ? "check" : "play", state.bridgeStarting ? "spin" : "")}
-          ${state.bridgeStarting ? "正在启动" : state.bridgeConnected ? "桥接已运行" : extensionRuntime ? "一键启动" : "需在扩展中使用"}
+        <button class="secondary-button native-start-button" id="start-native-bridge" ${!extensionRuntime || !nativeStartSupported || state.bridgeStarting || state.bridgeReachable ? "disabled" : ""}>
+          ${icon(state.bridgeStarting ? "refresh" : state.bridgeReachable ? "check" : "play", state.bridgeStarting ? "spin" : "")}
+          ${state.bridgeStarting ? "正在启动" : state.bridgeReachable ? "桥接已运行" : extensionRuntime ? "一键启动" : "需在扩展中使用"}
         </button>
       </div>
-      <details class="native-setup-details"><summary>首次使用：注册 Native Messaging</summary>
+      ${state.bridgeMessage ? `<p class="native-bridge-result ${state.bridgeConnected ? "is-success" : state.bridgeReachable ? "is-warning" : "is-error"}">${escapeHtml(state.bridgeMessage)}</p>` : ""}
+      <details class="native-setup-details" ${state.nativeSetupOpen ? "open" : ""}><summary>首次使用：注册 Native Messaging</summary>
         <p>在项目根目录运行一次下面的命令；它只注册当前扩展 ID，不需要管理员权限。</p>
         <div class="command-block"><code>${escapeHtml(installCommand)}</code><button class="icon-button" id="copy-native-install" aria-label="复制 Native Messaging 注册命令">${icon(state.copied === "native-install" ? "check" : "copy")}</button></div>
       </details>
@@ -420,9 +405,13 @@ function isDefaultBridgeUrl(value) {
 }
 
 function renderApiSettings(draft) {
+  const configured = Boolean(draft.apiBaseUrl.trim() && draft.apiModel.trim() && draft.apiKey.trim());
+  const connected = state.apiConnected && state.apiCheckKey === apiConnectionKey(draft);
+  const statusClass = connected ? "is-online" : "is-offline";
+  const statusLabel = connected ? "已连接" : configured ? "待检测" : "未配置";
   return `<section class="connection-section" aria-labelledby="api-status-heading">
     <div class="section-title-row"><div><span class="section-icon">${icon("key")}</span><h2 id="api-status-heading">API Key 连接</h2></div>
-      <span class="connection-label ${draft.apiKey ? "is-online" : "is-offline"}"><span class="status-dot"></span>${draft.apiKey ? "已填写" : "未配置"}</span></div>
+      <span class="connection-label ${statusClass}"><span class="status-dot"></span>${statusLabel}</span></div>
     <div class="api-fields">
       <label class="form-field"><span>API Base URL</span><input id="api-base-url" value="${escapeHtml(draft.apiBaseUrl)}" placeholder="https://api.openai.com/v1" spellcheck="false" /></label>
       <div class="two-column-fields">
@@ -467,10 +456,7 @@ function syncDraftFromSettings() {
 }
 
 function attachSettingsEvents() {
-  document.querySelectorAll(".back-settings").forEach((button) => button.addEventListener("click", () => {
-    state.view = "translator";
-    renderTranslator();
-  }));
+  document.querySelectorAll(".back-settings").forEach((button) => button.addEventListener("click", () => void switchView("translator")));
   document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
     syncDraftFromSettings();
     state.draft.mode = button.dataset.mode;
@@ -488,6 +474,9 @@ function attachSettingsEvents() {
     state.draft.cliModel = "";
     if (state.draft.cliProvider === "ollama") state.advancedOpen = true;
     state.bridgeConnected = false;
+    state.bridgeReachable = false;
+    state.bridgeMessage = "";
+    state.bridgeCheckKey = "";
     state.notice = "";
     renderSettings();
   });
@@ -498,6 +487,9 @@ function attachSettingsEvents() {
   });
   document.querySelector("#check-bridge")?.addEventListener("click", () => void handleCheckBridge());
   document.querySelector("#start-native-bridge")?.addEventListener("click", () => void handleStartNativeBridge());
+  document.querySelector(".native-setup-details")?.addEventListener("toggle", (event) => {
+    state.nativeSetupOpen = event.currentTarget.open;
+  });
   document.querySelector("#copy-native-install")?.addEventListener("click", () => {
     const extensionId = extensionRuntime ? chrome.runtime.id : "<扩展 ID>";
     const command = `powershell -ExecutionPolicy Bypass -File .\\native-host\\install.ps1 -ExtensionId ${extensionId} -Browser Both`;
@@ -525,6 +517,7 @@ async function handleStartNativeBridge() {
   }
   state.bridgeStarting = true;
   state.notice = "正在通过本机助手启动桥接…";
+  state.bridgeMessage = state.notice;
   renderSettings();
   try {
     const result = await chrome.runtime.sendMessage({ type: NATIVE_BRIDGE_START_MESSAGE });
@@ -536,13 +529,19 @@ async function handleStartNativeBridge() {
       await new Promise((resolve) => window.setTimeout(resolve, 400));
     }
     if (!health) throw new Error("本机助手已响应，但桥接服务没有在 127.0.0.1:8989 启动");
+    state.bridgeReachable = health.ok === true;
     state.bridgeConnected = health.ready === true;
+    state.bridgeCheckKey = cliConnectionKey(state.draft);
+    state.bridgeMessage = health.statusMessage || "本地桥接已启动";
     state.notice = health.ready
       ? `${result.message} · ${health.statusMessage}`
       : health.statusMessage || "桥接已启动，但当前模型 CLI 尚未就绪";
   } catch (error) {
     state.bridgeConnected = false;
+    state.bridgeReachable = false;
+    state.bridgeCheckKey = "";
     state.notice = error instanceof Error ? error.message : "本机桥接助手启动失败";
+    state.bridgeMessage = state.notice;
   } finally {
     state.bridgeStarting = false;
     renderSettings();
@@ -556,11 +555,17 @@ async function handleCheckBridge() {
   renderSettings();
   try {
     const health = await checkBridge(state.draft.bridgeUrl, state.draft.cliProvider);
+    state.bridgeReachable = health.ok === true;
     state.bridgeConnected = health.ready;
+    state.bridgeCheckKey = cliConnectionKey(state.draft);
+    state.bridgeMessage = health.statusMessage || "本地桥接已连接";
     state.notice = health.ready && health.version ? `${health.statusMessage} · ${health.version}` : health.statusMessage;
   } catch {
     state.bridgeConnected = false;
+    state.bridgeReachable = false;
+    state.bridgeCheckKey = "";
     state.notice = "无法连接本地桥接服务，请先运行 npm run bridge";
+    state.bridgeMessage = state.notice;
   } finally {
     state.checking = false;
     renderSettings();
@@ -583,17 +588,36 @@ async function handleSaveSettings() {
         throw new Error("请完整填写 API 地址、模型名称和 API Key");
       }
       if (!await ensureApiOriginPermission(state.draft.apiBaseUrl)) throw new Error("未获得该 API 域名的网络访问权限");
+      const apiHealth = await checkApiConnection(state.draft);
+      state.apiConnected = apiHealth.ok === true;
+      state.apiCheckKey = apiConnectionKey(state.draft);
+      state.apiMessage = apiHealth.statusMessage;
     }
     if (state.draft.mode === "cli" && state.draft.cliProvider === "ollama" && !state.draft.cliModel.trim()) {
       throw new Error("Ollama 模式必须填写已安装的模型名称");
     }
     state.config = { ...state.draft };
     await saveConfig(state.config);
-    state.bridgeConnected = state.config.mode === "cli"
-      ? await checkBridge(state.config.bridgeUrl, state.config.cliProvider).then((health) => health.ready).catch(() => false)
-      : false;
-    state.notice = "设置已保存";
+    if (state.config.mode === "cli") {
+      const health = await checkBridge(state.config.bridgeUrl, state.config.cliProvider).catch(() => null);
+      state.bridgeReachable = health?.ok === true;
+      state.bridgeConnected = health?.ready === true;
+      state.bridgeMessage = health?.statusMessage || "";
+      state.bridgeCheckKey = health ? cliConnectionKey(state.config) : "";
+    } else {
+      state.bridgeReachable = false;
+      state.bridgeConnected = false;
+      state.bridgeMessage = "";
+    }
+    state.notice = isConnectionReady()
+      ? "设置已保存，AI 连接已就绪，可以返回翻译"
+      : `设置已保存，但 AI 连接尚未就绪：${connectionGateMessage()}`;
   } catch (error) {
+    if (state.draft.mode === "api") {
+      state.apiConnected = false;
+      state.apiCheckKey = "";
+      state.apiMessage = error instanceof Error ? error.message : "API 连接检测失败";
+    }
     state.notice = error instanceof Error ? error.message : "保存失败";
   } finally {
     state.saving = false;
@@ -650,32 +674,52 @@ ${guide.steps.map((step, index) => `${index + 1}. ${step.title}：${step.descrip
 }
 
 async function initialize() {
-  const [config, comparison, job, selection] = await Promise.all([
+  const [config, job, selection] = await Promise.all([
     loadConfig(),
-    loadLastComparison(),
     loadJobState(),
     loadPageSelection(),
   ]);
   state.config = config;
   state.draft = { ...config };
   if (extensionRuntime) {
-    state.comparison = comparison;
     state.jobState = job;
     state.pageSelection = selection;
     state.isPending = job?.status === "running";
     if (config.mode === "cli") {
-      state.bridgeConnected = await checkBridge(config.bridgeUrl, config.cliProvider)
-        .then((health) => health.ready)
-        .catch(() => false);
+      const health = await checkBridge(config.bridgeUrl, config.cliProvider).catch(() => null);
+      state.bridgeReachable = health?.ok === true;
+      state.bridgeConnected = health?.ready === true;
+      state.bridgeMessage = health?.statusMessage || "";
+      state.bridgeCheckKey = health ? cliConnectionKey(config) : "";
+    } else if (config.apiBaseUrl.trim() && config.apiModel.trim() && config.apiKey.trim()) {
+      try {
+        const apiHealth = await checkApiConnection(config);
+        state.apiConnected = apiHealth.ok === true;
+        state.apiCheckKey = apiConnectionKey(config);
+        state.apiMessage = apiHealth.statusMessage;
+      } catch (error) {
+        state.apiMessage = error instanceof Error ? error.message : "API 连接检测失败";
+      }
     }
+    state.view = isConnectionReady(config) ? "translator" : "settings";
+    if (state.view === "settings") state.notice = connectionGateMessage(config);
+  } else if (previewConnectionState === "ready") {
+    state.bridgeConnected = true;
+    state.bridgeReachable = true;
+    state.bridgeMessage = "Codex CLI 已就绪";
+    state.bridgeCheckKey = cliConnectionKey(config);
+  } else if (previewConnectionState === "error") {
+    state.view = "settings";
+    state.bridgeMessage = "无法连接本地桥接服务";
+    state.notice = connectionGateMessage(config);
   }
-  renderTranslator();
+  if (state.view === "settings") renderSettings();
+  else renderTranslator();
   void refreshSelection();
   window.setInterval(() => void refreshSelection(), 900);
 
   if (extensionRuntime) {
     chrome.storage.onChanged.addListener((changes) => {
-      if (changes[LAST_COMPARISON_KEY]?.newValue) state.comparison = changes[LAST_COMPARISON_KEY].newValue;
       if (changes[JOB_STATE_KEY]?.newValue) {
         state.jobState = changes[JOB_STATE_KEY].newValue;
         state.isPending = state.jobState.status === "running";
