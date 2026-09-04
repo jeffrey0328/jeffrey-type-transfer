@@ -41,6 +41,17 @@ function Resolve-ApplicationPath([string]$Name) {
   return $command.Source
 }
 
+$codexHome = if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+  [System.IO.Path]::GetFullPath($env:CODEX_HOME)
+} else {
+  $profileRoot = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+    $env:USERPROFILE
+  } else {
+    [Environment]::GetFolderPath('UserProfile')
+  }
+  Join-Path $profileRoot '.codex'
+}
+
 New-Item -ItemType Directory -Force -Path $binPath | Out-Null
 & $compilerPath /nologo /target:exe /platform:anycpu "/out:$executablePath" /reference:System.Runtime.Serialization.dll $sourcePath
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $executablePath)) {
@@ -51,6 +62,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $config = [ordered]@{
   nodePath = $nodeCommand.Source
   projectRoot = $projectRoot
+  codexHome = $codexHome
   cliPaths = [ordered]@{
     codex = Resolve-ApplicationPath 'codex'
     claude = Resolve-ApplicationPath 'claude'

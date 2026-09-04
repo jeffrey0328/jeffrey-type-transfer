@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveCodexCommand, resolveCodexHome } from "./codex-runtime.mjs";
+
 const NATIVE_LAUNCH = process.argv.includes("--native-launch");
 const HOST = NATIVE_LAUNCH ? "127.0.0.1" : process.env.YUQIAO_HOST || "127.0.0.1";
 const PORT = NATIVE_LAUNCH ? 8989 : Number(process.env.YUQIAO_PORT || 8989);
@@ -30,20 +32,26 @@ const OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const PROVIDER_IDS = new Set(["codex", "claude", "gemini", "qwen", "ollama", "glm", "deepseek"]);
 const NATIVE_CONFIG_PATH = fileURLToPath(new URL("../native-host/bin/host-config.json", import.meta.url));
 
-function loadNativeCliPaths() {
+function loadNativeConfig() {
   if (!NATIVE_LAUNCH || !existsSync(NATIVE_CONFIG_PATH)) return {};
   try {
-    const configured = JSON.parse(readFileSync(NATIVE_CONFIG_PATH, "utf8")).cliPaths;
-    if (!configured || typeof configured !== "object") return {};
-    return Object.fromEntries(Object.entries(configured).filter(([, value]) =>
-      typeof value === "string" && isAbsolute(value) && existsSync(value),
-    ));
+    const configured = JSON.parse(readFileSync(NATIVE_CONFIG_PATH, "utf8"));
+    return configured && typeof configured === "object" ? configured : {};
   } catch {
     return {};
   }
 }
 
-const NATIVE_CLI_PATHS = loadNativeCliPaths();
+const NATIVE_CONFIG = loadNativeConfig();
+const NATIVE_CLI_PATHS = Object.fromEntries(
+  Object.entries(NATIVE_CONFIG.cliPaths || {}).filter(([, value]) =>
+    typeof value === "string" && isAbsolute(value) && existsSync(value),
+  ),
+);
+const NATIVE_CODEX_HOME = resolveCodexHome(NATIVE_CONFIG.codexHome);
+const CODEX_ENV = NATIVE_CODEX_HOME
+  ? { ...process.env, CODEX_HOME: NATIVE_CODEX_HOME }
+  : undefined;
 let activeRuns = 0;
 
 function getAdapter(provider) {
@@ -106,10 +114,14 @@ function getAdapter(provider) {
       return {
         id: "codex",
         label: "Codex CLI",
-        command: NATIVE_CLI_PATHS.codex || process.env.CODEX_BIN || "codex",
+        command: resolveCodexCommand({
+          configuredPath: NATIVE_CONFIG.cliPaths?.codex,
+          env: process.env,
+        }),
         versionArgs: ["--version"],
         auth: "codex",
         runner: "codex",
+        env: CODEX_ENV,
       };
   }
 }
@@ -160,12 +172,18 @@ function readJson(request) {
   });
 }
 
-function run(command, args, { input = "", timeout = 10_000, label = "模型 CLI" } = {}) {
+function run(command, args, {
+  input = "",
+  timeout = 10_000,
+  label = "模型 CLI",
+  env,
+} = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
+      env,
     });
     const stdout = [];
     const stderr = [];
@@ -192,7 +210,11 @@ function run(command, args, { input = "", timeout = 10_000, label = "模型 CLI"
 
 async function checkAuthentication(adapter) {
   if (adapter.auth === "codex") {
-    await run(adapter.command, ["login", "status"], { timeout: 5_000, label: adapter.label });
+    await run(adapter.command, ["login", "status"], {
+      timeout: 5_000,
+      label: adapter.label,
+      env: adapter.env,
+    });
     return { authenticated: true, ready: true, statusMessage: "已通过 ChatGPT/Codex 登录" };
   }
   if (adapter.auth === "claude") {
@@ -291,6 +313,7 @@ async function health(provider) {
   try {
     const versionResult = await run(adapter.command, adapter.versionArgs, {
       label: adapter.label,
+      env: adapter.env,
     });
     try {
       const auth = await checkAuthentication(adapter);
@@ -532,6 +555,7 @@ async function translate(payload) {
       input: createPrompt({ text, sourceLanguage, targetLanguage, tone }),
       timeout: RUN_TIMEOUT_MS,
       label: adapter.label,
+      env: adapter.env,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

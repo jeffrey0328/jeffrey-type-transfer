@@ -50,7 +50,7 @@ export const CLI_GUIDES = {
     summary: "使用 ChatGPT/Codex 订阅登录，不需要 OpenAI API Key。",
     steps: [
       { title: "安装 Codex CLI", description: "已安装时可以跳过。", command: "npm install -g @openai/codex" },
-      { title: "登录 ChatGPT 账号", description: "使用注册时记录的 Codex CLI 路径，浏览器会打开登录页。", command: "powershell -ExecutionPolicy Bypass -File .\\native-host\\codex-login.ps1" },
+      { title: "登录 ChatGPT 账号", description: "复用固定的 Codex 凭据目录，并自动发现更新后的桌面版 CLI。", command: "powershell -ExecutionPolicy Bypass -File .\\native-host\\codex-login.ps1" },
       { title: "确认登录状态", description: "只检查状态，不要读取凭据文件。", command: "powershell -ExecutionPolicy Bypass -File .\\native-host\\codex-login.ps1 -Status" },
       { title: "启动本地桥接", description: "可手动运行，或注册本机助手后在扩展中一键启动。", command: "npm run bridge" },
     ],

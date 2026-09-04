@@ -91,9 +91,9 @@ powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId 
 
 3. 在扩展管理页重新加载扩展，然后进入“连接与设置”，点击“一键启动”。
 
-注册脚本使用当前用户的 Chrome/Edge 注册表项，不需要管理员权限；它会从本项目源码编译一个小型本机宿主。宿主只接受固定的 `start` 指令，只启动当前项目的 `bridge/server.mjs`，并强制监听 `127.0.0.1:8989`。它不会读取 Codex 凭据，也不会接受扩展传入的任意命令、路径、地址或端口。
-注册时还会记录当前终端能找到的模型 CLI 程序路径，避免从浏览器后台启动时丢失 `PATH`。如果 CLI 升级后安装路径改变，重新运行一次注册命令即可。
-如果普通 PowerShell 提示无法识别 `codex`，可在项目根目录运行 `powershell -ExecutionPolicy Bypass -File .\native-host\codex-login.ps1`；该脚本会使用上述已记录的程序路径。
+注册脚本使用当前用户的 Chrome/Edge 注册表项，不需要管理员权限；它会从本项目源码编译一个小型本机宿主。宿主只接受固定的 `start` 指令，只启动当前项目的 `bridge/server.mjs`，并强制监听 `127.0.0.1:8989`。它不会读取 Codex 凭据，也不会接受扩展传入的任意命令、路径、地址或端口。注册时只记录当前 Codex 凭据目录的路径，桥接调用 CLI 时会显式复用该目录；桌面版 Codex 更新并更换内部版本目录后，桥接会自动发现最新的 `codex.exe`，无需重新注册或登录。
+注册时还会记录当前终端能找到的模型 CLI 程序路径，避免从浏览器后台启动时丢失 `PATH`。Codex 桌面版路径会自动重新发现；其他 CLI 升级并移动安装位置后，重新运行一次注册命令即可。
+如果普通 PowerShell 提示无法识别 `codex`，可在项目根目录运行 `powershell -ExecutionPolicy Bypass -File .\native-host\codex-login.ps1`；该脚本会优先使用已记录的路径，并在路径失效时重新发现 Codex CLI。
 
 如需移除注册：
 

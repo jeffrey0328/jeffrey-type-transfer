@@ -94,8 +94,8 @@ powershell -ExecutionPolicy Bypass -File .\native-host\install.ps1 -ExtensionId 
 3. Reload the unpacked extension, open **Connection & Settings**, and select **One-click start**.
 
 The installer uses per-user Chrome/Edge registry entries and does not require administrator privileges. It compiles a small native host from the source in this repository. The host only accepts a fixed `start` action, launches this project's `bridge/server.mjs`, and forces `127.0.0.1:8989`. It does not read Codex credentials and cannot accept arbitrary commands, paths, hosts, or ports from the extension.
-The installer also records model CLI executable paths visible in the current terminal so a browser-launched bridge does not lose them with a different `PATH`. Run the registration command again if a CLI upgrade moves its executable.
-If a regular PowerShell session cannot resolve `codex`, run `powershell -ExecutionPolicy Bypass -File .\native-host\codex-login.ps1` from the project root; the helper uses the executable path captured during registration.
+The installer records the model CLI paths visible in the current terminal and the path to the current Codex credential directory (never its contents). Browser-launched Codex commands explicitly reuse that directory. If the Codex desktop app moves its bundled CLI during an update, the bridge discovers the newest `codex.exe` automatically, so re-registration and re-login are not required.
+If a regular PowerShell session cannot resolve `codex`, run `powershell -ExecutionPolicy Bypass -File .\native-host\codex-login.ps1` from the project root; the helper prefers the captured executable path and rediscovers Codex CLI when that path is stale.
 
 To remove the registration:
 

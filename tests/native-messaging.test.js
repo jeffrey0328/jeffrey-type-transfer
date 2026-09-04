@@ -65,6 +65,8 @@ test("Windows 注册脚本只使用当前用户注册表并固定允许的扩展
   assert.match(source, /HKCU:\\Software\\Microsoft\\Edge\\NativeMessagingHosts/);
   assert.match(source, /chrome-extension:\/\/\$ExtensionId\//);
   assert.match(source, /cliPaths = \[ordered\]@\{/);
+  assert.match(source, /codexHome = \$codexHome/);
+  assert.match(source, /\$env:USERPROFILE/);
   assert.match(source, /Get-Command \$Name -CommandType Application/);
   assert.match(source, /Native Messaging 注册校验失败/);
   assert.doesNotMatch(source, /HKLM:/);
@@ -91,7 +93,8 @@ test("本机启动时桥接不保留 Native Messaging 标准流", async () => {
   assert.match(source, /process\.stdin\.destroy\(\)/);
   assert.match(source, /process\.stdout\.destroy\(\)/);
   assert.match(source, /process\.stderr\.destroy\(\)/);
-  assert.match(source, /NATIVE_CLI_PATHS\.codex/);
+  assert.match(source, /resolveCodexCommand/);
+  assert.match(source, /CODEX_HOME: NATIVE_CODEX_HOME/);
   assert.match(source, /jeffrey-type-transfer-schema-\$\{process\.pid\}\.json/);
   assert.match(source, /--output-schema", RUNTIME_OUTPUT_SCHEMA_PATH/);
 });
@@ -113,13 +116,16 @@ test("复制注册命令后保留首次使用展开状态", async () => {
   assert.match(source, /state\.nativeSetupOpen = event\.currentTarget\.open/);
 });
 
-test("Codex 登录助手使用注册时记录的 CLI 路径", async () => {
+test("Codex 登录助手复用注册时的凭据目录并能重新发现 CLI", async () => {
   const [script, config] = await Promise.all([
     readFile(new URL("../native-host/codex-login.ps1", import.meta.url), "utf8"),
     readFile(new URL("../app-config.js", import.meta.url), "utf8"),
   ]);
   assert.match(script, /host-config\.json/);
   assert.match(script, /\$config\.cliPaths\.codex/);
+  assert.match(script, /Find-CodexPath/);
+  assert.match(script, /OpenAI\\Codex\\bin/);
+  assert.match(script, /\$env:CODEX_HOME/);
   assert.doesNotMatch(script, /auth\.json|API[_ ]?Key/i);
   assert.match(config, /native-host\\\\codex-login\.ps1/);
 });
