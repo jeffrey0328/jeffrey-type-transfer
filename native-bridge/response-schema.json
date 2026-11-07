@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["replace_text"],
+      "description": "The extension may replace only its currently selected editable text."
+    },
+    "translation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Replacement text only; it is never a command or an instruction to the bridge."
+    }
+  },
+  "required": ["action", "translation"],
+  "additionalProperties": false
+}

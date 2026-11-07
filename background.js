@@ -10,10 +10,6 @@ import {
   savePageSelection,
 } from "./storage.js";
 import { translateText } from "./translate.js";
-import {
-  NATIVE_BRIDGE_START_MESSAGE,
-  startNativeBridge,
-} from "./native-bridge.js";
 
 async function resolveTabId(tabId) {
   if (typeof tabId === "number") return tabId;
@@ -108,11 +104,7 @@ chrome.commands.onCommand.addListener((command) => {
   if (command === "translate-selection") void translateAndReplace();
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === NATIVE_BRIDGE_START_MESSAGE) {
-    void startNativeBridge(chrome).then(sendResponse);
-    return true;
-  }
+chrome.runtime.onMessage.addListener((message, sender) => {
   if (message?.type !== "yuqiao-selection-updated" ||
       typeof sender.tab?.id !== "number" || sender.tab.active !== true) return false;
   const selection = message.selection;

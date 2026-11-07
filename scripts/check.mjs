@@ -12,11 +12,9 @@ const requiredFiles = [
   "translate.js",
   "page-selection.js",
   "selection-tracker.js",
-  "native-bridge.js",
-  "native-host/JeffreyTypeTransfer.NativeHost.cs",
-  "native-host/codex-login.ps1",
-  "native-host/install.ps1",
-  "native-host/uninstall.ps1",
+  "native-bridge/start-bridge.cmd",
+  "native-bridge/server.ps1",
+  "native-bridge/response-schema.json",
 ];
 for (const file of requiredFiles) {
   if (!existsSync(file)) throw new Error(`缺少扩展运行文件：${file}`);
@@ -26,8 +24,11 @@ for (const file of requiredFiles.filter((file) => file.endsWith(".js"))) {
   const result = spawnSync(process.execPath, ["--check", file], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(result.stderr || `${file} 语法检查失败`);
 }
-if (!manifest.permissions?.includes("nativeMessaging")) {
-  throw new Error("manifest.json 缺少 nativeMessaging 权限");
+if (!manifest.permissions?.includes("storage") || manifest.permissions?.includes("nativeMessaging")) {
+  throw new Error("manifest.json 的扩展权限不符合 HTTP 桥接要求");
+}
+if (!manifest.host_permissions?.includes("http://127.0.0.1/*")) {
+  throw new Error("manifest.json 缺少 127.0.0.1 host_permission");
 }
 
 const html = readFileSync(manifest.side_panel.default_path, "utf8");

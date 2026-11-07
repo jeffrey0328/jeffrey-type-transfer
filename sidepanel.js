@@ -3,10 +3,8 @@
 import {
   APP_DISPLAY_NAME,
   CLI_GUIDES,
-  CLI_PROVIDERS,
   DEFAULT_CONFIG,
   LANGUAGES,
-  getCliProviderMeta,
 } from "./app-config.js";
 import { capturePageSelection, replacePageSelection } from "./page-selection.js";
 import {
@@ -19,8 +17,7 @@ import {
   saveConfig,
   savePageSelection,
 } from "./storage.js";
-import { checkApiConnection, checkBridge, translateText } from "./translate.js";
-import { NATIVE_BRIDGE_START_MESSAGE } from "./native-bridge.js";
+import { checkApiConnection, fetchBridgeModels, requestBridgeToken, translateText, verifyBridgeConnection } from "./translate.js";
 
 const root = document.querySelector("#root");
 const extensionRuntime =
@@ -46,6 +43,8 @@ const state = {
   bridgeReachable: false,
   bridgeMessage: "",
   bridgeCheckKey: "",
+  bridgeModels: [],
+  bridgeModelsKey: "",
   apiConnected: false,
   apiCheckKey: "",
   apiMessage: "",
@@ -55,9 +54,8 @@ const state = {
   guideTab: "text",
   advancedOpen: false,
   checking: false,
+  modelsLoading: false,
   saving: false,
-  bridgeStarting: false,
-  nativeSetupOpen: false,
   notice: "",
   copied: "",
   transitioning: false,
@@ -104,7 +102,7 @@ function optionMarkup(items, selected) {
 }
 
 function cliConnectionKey(config) {
-  return `${String(config.bridgeUrl).trim()}\n${config.cliProvider}`;
+  return `${String(config.bridgeUrl).trim()}\n${String(config.bridgeToken).trim()}\n${String(config.cliModel).trim()}`;
 }
 
 function apiConnectionKey(config) {
@@ -122,7 +120,7 @@ function connectionGateMessage(config = state.config) {
   if (config.mode === "api") {
     return state.apiMessage || "请完整填写 API 配置并点击“保存并检测”。";
   }
-  return state.bridgeMessage || `请先启动桥接并确认 ${getCliProviderMeta(config.cliProvider).shortLabel} 已就绪。`;
+  return state.bridgeMessage || "请先启动桥接并确认 Codex CLI 已就绪。";
 }
 
 async function switchView(nextView) {
@@ -163,11 +161,10 @@ async function switchView(nextView) {
 
 function renderTranslator() {
   const config = state.config;
-  const provider = getCliProviderMeta(config.cliProvider);
   const connected = isConnectionReady(config);
   const connectionLabel = config.mode === "api"
     ? (config.apiKey ? `API · ${config.apiModel}` : "API Key · 待配置")
-    : `${provider.shortLabel} · ${connected ? "已连接" : "未连接"}`;
+    : `Codex CLI · ${connected ? "已连接" : "未连接"}`;
   const selection = state.pageSelection;
   const optionControlsDisabled = state.isPending;
   const translateDisabled = !selection || state.isPending;
@@ -256,7 +253,7 @@ async function handleTranslate() {
   if (state.config.mode === "cli" && !state.bridgeConnected && extensionRuntime) {
     state.jobState = {
       status: "error",
-      message: `${getCliProviderMeta(state.config.cliProvider).shortLabel} 尚未连接，请先打开设置完成配置并检测连接`,
+      message: "Codex CLI 尚未连接，请先打开设置完成配置并检测连接",
       createdAt: Date.now(),
     };
     renderTranslator();
@@ -303,10 +300,8 @@ function openSettings() {
 function renderSettings() {
   const draft = state.draft;
   const mode = draft.mode;
-  const provider = getCliProviderMeta(draft.cliProvider);
-  const guide = CLI_GUIDES[draft.cliProvider];
-  const advancedVisible = state.advancedOpen || draft.cliProvider === "ollama";
-  const connectionSection = mode === "cli" ? renderCliSettings(draft, provider, guide, advancedVisible) : renderApiSettings(draft);
+  const guide = CLI_GUIDES.codex;
+  const connectionSection = mode === "cli" ? renderCliSettings(draft) : renderApiSettings(draft);
   const guideContent = state.guideTab === "agent"
     ? `<div class="agent-prompt-panel">
         <div class="agent-prompt-heading"><div>${icon("code")}<span>把下面提示词交给你的编码 Agent</span></div>
@@ -346,62 +341,33 @@ function renderSettings() {
   attachSettingsEvents();
 }
 
-function renderCliSettings(draft, provider, guide, advancedVisible) {
-  const providerOptions = CLI_PROVIDERS.map((item) => ({
-    value: item.value,
-    label: `${item.label} · ${item.authLabel}`,
-  }));
-  const modelLabel = draft.cliProvider === "ollama"
-    ? "Ollama 模型名称（必填，按 ollama ls 原样填写）"
-    : "模型名称（留空则使用当前 CLI 默认模型）";
-  const placeholders = {
-    ollama: "按 ollama ls 的输出原样填写",
-    codex: "例如：gpt-5.6-codex",
-    claude: "例如：sonnet",
-    glm: "例如：GLM-4.7",
-  };
-  const nativeStartSupported = isDefaultBridgeUrl(draft.bridgeUrl);
-  const extensionId = extensionRuntime ? chrome.runtime.id : "<扩展 ID>";
-  const installCommand = `powershell -ExecutionPolicy Bypass -File .\\native-host\\install.ps1 -ExtensionId ${extensionId} -Browser Both`;
+function renderCliSettings(draft) {
   const bridgeStateClass = state.bridgeConnected
     ? "is-online"
     : state.bridgeReachable ? "is-warning" : "is-offline";
   const bridgeStateLabel = state.bridgeConnected
     ? "已就绪"
     : state.bridgeReachable ? "桥接在线" : "未连接";
+  const knownModels = state.bridgeModelsKey === modelListKey(draft) ? state.bridgeModels : [];
+  const customModel = draft.cliModel && !knownModels.some((model) => model.id === draft.cliModel)
+    ? `<option value="${escapeHtml(draft.cliModel)}" selected>当前自定义：${escapeHtml(draft.cliModel)}</option>` : "";
+  const defaultOption = knownModels.length ? "" : `<option value="" selected>使用 Codex CLI 默认模型</option>`;
+  const modelOptions = `${defaultOption}${customModel}${knownModels.map((model) => `<option value="${escapeHtml(model.id)}" ${model.id === draft.cliModel ? "selected" : ""}>${escapeHtml(model.label)}</option>`).join("")}`;
   return `<section class="connection-section" aria-labelledby="cli-status-heading">
-    <div class="section-title-row"><div><span class="section-icon">${icon("terminal")}</span><h2 id="cli-status-heading">${escapeHtml(provider.label)}</h2></div>
+    <div class="section-title-row"><div><span class="section-icon">${icon("terminal")}</span><h2 id="cli-status-heading">Codex CLI 本机桥接</h2></div>
       <span class="connection-label ${bridgeStateClass}"><span class="status-dot"></span>${bridgeStateLabel}</span></div>
-    <label class="form-field cli-provider-field"><span>CLI / 模型服务</span><select id="cli-provider">${optionMarkup(providerOptions, draft.cliProvider)}</select><small class="provider-summary">${escapeHtml(guide.summary)}</small></label>
     <label class="form-field"><span>本地桥接地址</span><div class="inline-input-button"><input id="bridge-url" value="${escapeHtml(draft.bridgeUrl)}" spellcheck="false" />
-      <button class="secondary-button" id="check-bridge" ${state.checking ? "disabled" : ""}>${icon(state.checking ? "refresh" : "server", state.checking ? "spin" : "")}${state.checking ? "检测中" : "检测连接"}</button></div></label>
-    <div class="native-bridge-launcher">
-      <div class="native-bridge-heading"><div><strong>本机桥接助手</strong><span>无需保持终端窗口</span></div>
-        <button class="secondary-button native-start-button" id="start-native-bridge" ${!extensionRuntime || !nativeStartSupported || state.bridgeStarting || state.bridgeReachable ? "disabled" : ""}>
-          ${icon(state.bridgeStarting ? "refresh" : state.bridgeReachable ? "check" : "play", state.bridgeStarting ? "spin" : "")}
-          ${state.bridgeStarting ? "正在启动" : state.bridgeReachable ? "桥接已运行" : extensionRuntime ? "一键启动" : "需在扩展中使用"}
-        </button>
-      </div>
-      ${state.bridgeMessage ? `<p class="native-bridge-result ${state.bridgeConnected ? "is-success" : state.bridgeReachable ? "is-warning" : "is-error"}">${escapeHtml(state.bridgeMessage)}</p>` : ""}
-      <details class="native-setup-details" ${state.nativeSetupOpen ? "open" : ""}><summary>首次使用：注册 Native Messaging</summary>
-        <p>在项目根目录运行一次下面的命令；它只注册当前扩展 ID，不需要管理员权限。</p>
-        <div class="command-block"><code>${escapeHtml(installCommand)}</code><button class="icon-button" id="copy-native-install" aria-label="复制 Native Messaging 注册命令">${icon(state.copied === "native-install" ? "check" : "copy")}</button></div>
-      </details>
-      ${nativeStartSupported ? "" : `<p class="native-bridge-warning">一键启动仅支持固定地址 http://127.0.0.1:8989。</p>`}
-    </div>
-    ${draft.cliProvider !== "ollama" ? `<button class="advanced-toggle" id="advanced-toggle">${icon("code")}高级设置${icon("chevron", state.advancedOpen ? "is-rotated" : "")}</button>` : ""}
-    ${advancedVisible ? `<label class="form-field advanced-field"><span>${modelLabel}</span><input id="cli-model" value="${escapeHtml(draft.cliModel)}" placeholder="${escapeHtml(placeholders[draft.cliProvider] || "留空使用 CLI 默认模型")}" /></label>` : ""}
+      <button class="secondary-button" id="check-bridge" ${state.checking ? "disabled" : ""}>${icon(state.checking ? "refresh" : "server", state.checking ? "spin" : "")}${state.checking ? "验证中" : "验证连接"}</button></div></label>
+    <label class="form-field"><span>桥接令牌</span><div class="inline-input-button"><input id="bridge-token" type="password" value="${escapeHtml(draft.bridgeToken)}" autocomplete="off" placeholder="点击右侧按钮自动获取" />
+      <button class="secondary-button" id="get-bridge-token" ${!extensionRuntime || state.checking ? "disabled" : ""}>${icon("key")}${extensionRuntime ? "获取令牌" : "需在扩展中使用"}</button></div><small class="provider-summary">首次获取会将此浏览器扩展 ID 绑定到本机桥接。令牌仅存于 chrome.storage.local，不会写入项目源码。</small></label>
+    <label class="form-field advanced-field"><span>可选模型名称</span><div class="inline-input-button"><select id="cli-model">${modelOptions}</select>
+      <button class="secondary-button" id="get-bridge-models" ${state.modelsLoading || state.checking ? "disabled" : ""}>${icon(state.modelsLoading ? "refresh" : "server", state.modelsLoading ? "spin" : "")}${state.modelsLoading ? "获取中" : "获取模型"}</button></div><small class="provider-summary">点击“获取模型”加载桥接推荐项；实际可用性由 Codex 登录账号决定。</small></label>
+    ${state.bridgeMessage ? `<p class="native-bridge-result ${state.bridgeConnected ? "is-success" : state.bridgeReachable ? "is-warning" : "is-error"}">${escapeHtml(state.bridgeMessage)}</p>` : ""}
   </section>`;
 }
 
-function isDefaultBridgeUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" && url.hostname === "127.0.0.1" &&
-      url.port === "8989" && (url.pathname === "/" || url.pathname === "");
-  } catch {
-    return false;
-  }
+function modelListKey(config) {
+  return `${String(config.bridgeUrl).trim()}\n${String(config.bridgeToken).trim()}`;
 }
 
 function renderApiSettings(draft) {
@@ -443,7 +409,7 @@ function syncDraftFromSettings() {
   const value = (selector) => document.querySelector(selector)?.value;
   const fields = {
     bridgeUrl: value("#bridge-url"),
-    cliProvider: value("#cli-provider"),
+    bridgeToken: value("#bridge-token"),
     cliModel: value("#cli-model"),
     apiBaseUrl: value("#api-base-url"),
     apiProtocol: value("#api-protocol"),
@@ -468,37 +434,13 @@ function attachSettingsEvents() {
     state.guideTab = button.dataset.guide;
     renderSettings();
   }));
-  document.querySelector("#cli-provider")?.addEventListener("change", (event) => {
-    syncDraftFromSettings();
-    state.draft.cliProvider = event.target.value;
-    state.draft.cliModel = "";
-    if (state.draft.cliProvider === "ollama") state.advancedOpen = true;
-    state.bridgeConnected = false;
-    state.bridgeReachable = false;
-    state.bridgeMessage = "";
-    state.bridgeCheckKey = "";
-    state.notice = "";
-    renderSettings();
-  });
-  document.querySelector("#advanced-toggle")?.addEventListener("click", () => {
-    syncDraftFromSettings();
-    state.advancedOpen = !state.advancedOpen;
-    renderSettings();
-  });
   document.querySelector("#check-bridge")?.addEventListener("click", () => void handleCheckBridge());
-  document.querySelector("#start-native-bridge")?.addEventListener("click", () => void handleStartNativeBridge());
-  document.querySelector(".native-setup-details")?.addEventListener("toggle", (event) => {
-    state.nativeSetupOpen = event.currentTarget.open;
-  });
-  document.querySelector("#copy-native-install")?.addEventListener("click", () => {
-    const extensionId = extensionRuntime ? chrome.runtime.id : "<扩展 ID>";
-    const command = `powershell -ExecutionPolicy Bypass -File .\\native-host\\install.ps1 -ExtensionId ${extensionId} -Browser Both`;
-    void copyWithFeedback("native-install", command);
-  });
+  document.querySelector("#get-bridge-token")?.addEventListener("click", () => void handleGetBridgeToken());
+  document.querySelector("#get-bridge-models")?.addEventListener("click", () => void handleGetBridgeModels());
   document.querySelector("#save-settings")?.addEventListener("click", () => void handleSaveSettings());
   document.querySelectorAll(".copy-command").forEach((button) => button.addEventListener("click", () => {
     syncDraftFromSettings();
-    const command = CLI_GUIDES[state.draft.cliProvider].steps[Number(button.dataset.commandIndex)]?.command;
+    const command = CLI_GUIDES.codex.steps[Number(button.dataset.commandIndex)]?.command;
     if (command) void copyWithFeedback(command, command);
   }));
   document.querySelector("#copy-agent")?.addEventListener("click", () => {
@@ -507,67 +449,72 @@ function attachSettingsEvents() {
   });
 }
 
-async function handleStartNativeBridge() {
-  syncDraftFromSettings();
-  if (!extensionRuntime) return;
-  if (!isDefaultBridgeUrl(state.draft.bridgeUrl)) {
-    state.notice = "一键启动只允许使用 http://127.0.0.1:8989";
-    renderSettings();
-    return;
-  }
-  state.bridgeStarting = true;
-  state.notice = "正在通过本机助手启动桥接…";
-  state.bridgeMessage = state.notice;
-  renderSettings();
-  try {
-    const result = await chrome.runtime.sendMessage({ type: NATIVE_BRIDGE_START_MESSAGE });
-    if (!result?.ok) throw new Error(result?.message || "本机桥接助手启动失败");
-    let health;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      health = await checkBridge(state.draft.bridgeUrl, state.draft.cliProvider).catch(() => null);
-      if (health) break;
-      await new Promise((resolve) => window.setTimeout(resolve, 400));
-    }
-    if (!health) throw new Error("本机助手已响应，但桥接服务没有在 127.0.0.1:8989 启动");
-    state.bridgeReachable = health.ok === true;
-    state.bridgeConnected = health.ready === true;
-    state.bridgeCheckKey = cliConnectionKey(state.draft);
-    state.bridgeMessage = health.statusMessage || "本地桥接已启动";
-    state.notice = health.ready
-      ? `${result.message} · ${health.statusMessage}`
-      : health.statusMessage || "桥接已启动，但当前模型 CLI 尚未就绪";
-  } catch (error) {
-    state.bridgeConnected = false;
-    state.bridgeReachable = false;
-    state.bridgeCheckKey = "";
-    state.notice = error instanceof Error ? error.message : "本机桥接助手启动失败";
-    state.bridgeMessage = state.notice;
-  } finally {
-    state.bridgeStarting = false;
-    renderSettings();
-  }
-}
-
 async function handleCheckBridge() {
   syncDraftFromSettings();
   state.checking = true;
   state.notice = "";
   renderSettings();
   try {
-    const health = await checkBridge(state.draft.bridgeUrl, state.draft.cliProvider);
+    const health = await verifyBridgeConnection(state.draft);
     state.bridgeReachable = health.ok === true;
-    state.bridgeConnected = health.ready;
+    state.bridgeConnected = health.codexInstalled && health.loggedIn;
     state.bridgeCheckKey = cliConnectionKey(state.draft);
-    state.bridgeMessage = health.statusMessage || "本地桥接已连接";
-    state.notice = health.ready && health.version ? `${health.statusMessage} · ${health.version}` : health.statusMessage;
-  } catch {
+    state.bridgeMessage = "本地桥接已连接";
+    state.notice = `Codex CLI 已连接 · ${health.codexVersion}`;
+  } catch (error) {
     state.bridgeConnected = false;
     state.bridgeReachable = false;
     state.bridgeCheckKey = "";
-    state.notice = "无法连接本地桥接服务，请先运行 npm run bridge";
+    state.notice = error instanceof Error ? error.message : "无法连接本地桥接服务";
     state.bridgeMessage = state.notice;
   } finally {
     state.checking = false;
+    renderSettings();
+  }
+}
+
+async function handleGetBridgeToken() {
+  syncDraftFromSettings();
+  state.checking = true;
+  state.notice = "正在与本机桥接绑定并获取令牌…";
+  renderSettings();
+  try {
+    state.draft.bridgeToken = await requestBridgeToken(state.draft);
+    const health = await verifyBridgeConnection(state.draft);
+    state.config = { ...state.draft };
+    await saveConfig(state.config);
+    state.bridgeReachable = health.ok === true;
+    state.bridgeConnected = health.codexInstalled && health.loggedIn;
+    state.bridgeCheckKey = cliConnectionKey(state.config);
+    state.bridgeMessage = "本机桥接已连接";
+    state.notice = `令牌已获取并保存 · Codex CLI ${health.codexVersion}`;
+  } catch (error) {
+    state.bridgeConnected = false;
+    state.bridgeReachable = false;
+    state.bridgeCheckKey = "";
+    state.notice = error instanceof Error ? error.message : "获取桥接令牌失败";
+    state.bridgeMessage = state.notice;
+  } finally {
+    state.checking = false;
+    renderSettings();
+  }
+}
+
+async function handleGetBridgeModels() {
+  syncDraftFromSettings();
+  state.modelsLoading = true;
+  state.notice = "正在从本机桥接获取模型建议…";
+  renderSettings();
+  try {
+    state.bridgeModels = await fetchBridgeModels(state.draft);
+    state.bridgeModelsKey = modelListKey(state.draft);
+    state.notice = `已获取 ${state.bridgeModels.length - 1} 个 Codex 模型建议，可从下拉菜单选择`;
+  } catch (error) {
+    state.bridgeModels = [];
+    state.bridgeModelsKey = "";
+    state.notice = error instanceof Error ? error.message : "获取模型列表失败";
+  } finally {
+    state.modelsLoading = false;
     renderSettings();
   }
 }
@@ -593,16 +540,13 @@ async function handleSaveSettings() {
       state.apiCheckKey = apiConnectionKey(state.draft);
       state.apiMessage = apiHealth.statusMessage;
     }
-    if (state.draft.mode === "cli" && state.draft.cliProvider === "ollama" && !state.draft.cliModel.trim()) {
-      throw new Error("Ollama 模式必须填写已安装的模型名称");
-    }
     state.config = { ...state.draft };
     await saveConfig(state.config);
     if (state.config.mode === "cli") {
-      const health = await checkBridge(state.config.bridgeUrl, state.config.cliProvider).catch(() => null);
+      const health = await verifyBridgeConnection(state.config).catch(() => null);
       state.bridgeReachable = health?.ok === true;
-      state.bridgeConnected = health?.ready === true;
-      state.bridgeMessage = health?.statusMessage || "";
+      state.bridgeConnected = health?.codexInstalled === true && health?.loggedIn === true;
+      state.bridgeMessage = health ? "本地桥接已连接" : "";
       state.bridgeCheckKey = health ? cliConnectionKey(state.config) : "";
     } else {
       state.bridgeReachable = false;
@@ -638,28 +582,18 @@ async function copyWithFeedback(id, text) {
 
 function getAgentPrompt(mode, draft) {
   if (mode === "cli") {
-    const provider = getCliProviderMeta(draft.cliProvider);
-    const guide = CLI_GUIDES[draft.cliProvider];
-    const credentialRules = {
-      codex: "复用 ChatGPT/Codex 订阅登录，不创建 OpenAI API Key。",
-      claude: "优先使用 Claude Pro/Max 订阅登录，不创建 Anthropic API Key。",
-      gemini: "使用 Google 账号登录 Antigravity CLI，不创建 Gemini API Key。",
-      qwen: "优先复用已有 Coding Plan 或 Provider，只在 /auth 中本地配置。",
-      ollama: "只使用 127.0.0.1 上的 Ollama，不创建云端 API Key。",
-      glm: "只在官方工具中本地填写 Z.AI 计划凭据。",
-      deepseek: "只在本机环境中填写 DeepSeek Key，不在聊天或源码中暴露。",
-    };
-    return `请帮我配置“${APP_DISPLAY_NAME}”浏览器翻译扩展的 ${provider.label} 连接。项目目录就是当前工作区。
+    const guide = CLI_GUIDES.codex;
+    return `请帮我配置“${APP_DISPLAY_NAME}”浏览器翻译扩展的 Codex CLI 本机 HTTP 桥接。项目目录就是当前工作区。
 
 接入说明：${guide.summary}
-凭据原则：${credentialRules[draft.cliProvider]}
+凭据原则：复用 ChatGPT/Codex 订阅登录，不创建 OpenAI API Key。
 
 请按顺序执行并验证：
 ${guide.steps.map((step, index) => `${index + 1}. ${step.title}：${step.description}${step.command ? ` 建议命令：${step.command}` : ""}`).join("\n")}
-5. 启动 npm run bridge 后，请请求 ${draft.bridgeUrl}/health?provider=${draft.cliProvider}，确认 installed=true 且 ready=true。
+4. 启动 native-bridge\\start-bridge.cmd 后，填写桥接令牌并请求 ${draft.bridgeUrl}/health，确认 codexInstalled=true 且 loggedIn=true。
 6. 在 Chrome 或 Edge 中直接加载当前项目根目录，不要运行构建命令。
 
-安全约束：不要读取、打印或复制任何凭据文件和令牌；远程安装脚本执行前先向我确认；不要把桥接服务绑定到 0.0.0.0；不要暴露 8989 端口；遇到登录、Key、订阅或产生费用的步骤时暂停并让我操作。`;
+安全约束：不要打印或复制令牌到聊天；不要把桥接服务绑定到 0.0.0.0；桥接只允许固定 Codex read-only 调用；遇到登录、订阅或产生费用的步骤时暂停并让我操作。`;
   }
   return `请帮我配置“${APP_DISPLAY_NAME}”浏览器翻译扩展的 API Key 可选连接方式。
 
@@ -686,10 +620,10 @@ async function initialize() {
     state.pageSelection = selection;
     state.isPending = job?.status === "running";
     if (config.mode === "cli") {
-      const health = await checkBridge(config.bridgeUrl, config.cliProvider).catch(() => null);
+      const health = await verifyBridgeConnection(config).catch(() => null);
       state.bridgeReachable = health?.ok === true;
-      state.bridgeConnected = health?.ready === true;
-      state.bridgeMessage = health?.statusMessage || "";
+      state.bridgeConnected = health?.codexInstalled === true && health?.loggedIn === true;
+      state.bridgeMessage = health ? "本地桥接已连接" : "";
       state.bridgeCheckKey = health ? cliConnectionKey(config) : "";
     } else if (config.apiBaseUrl.trim() && config.apiModel.trim() && config.apiKey.trim()) {
       try {

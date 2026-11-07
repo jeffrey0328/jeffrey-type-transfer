@@ -6,3 +6,5 @@ npm-debug.log*
 playwright-report/
 test-results/
 native-host/bin/
+native-bridge/.bridge-token
+native-bridge/.bridge-extension-id
