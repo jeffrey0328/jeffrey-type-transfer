@@ -6,6 +6,9 @@ test("PowerShell 桥接固定使用回环地址、Bearer 令牌与 read-only Cod
   const source = await readFile(new URL("../native-bridge/server.ps1", import.meta.url), "utf8");
   assert.match(source, /http:\/\/127\.0\.0\.1:\$Port\//);
   assert.match(source, /RandomNumberGenerator/);
+  assert.match(source, /Get-Command codex\.exe/);
+  assert.match(source, /Get-Command codex/);
+  assert.match(source, /\.ps1\$/);
   assert.match(source, /Authorization/);
   assert.match(source, /bootstrap-token/);
   assert.match(source, /X-Bridge-Extension-Id/);
@@ -22,9 +25,9 @@ test("PowerShell 桥接固定使用回环地址、Bearer 令牌与 read-only Cod
 
 test("启动脚本只在登录状态失败时执行设备登录", async () => {
   const source = await readFile(new URL("../native-bridge/start-bridge.cmd", import.meta.url), "utf8");
-  assert.match(source, /where codex/);
+  assert.match(source, /Get-Command codex -ErrorAction SilentlyContinue/);
   assert.match(source, /codex login status/);
-  assert.match(source, /if errorlevel 1 \(\s*echo Codex 尚未登录[\s\S]*codex login --device-auth/);
+  assert.match(source, /if errorlevel 1 \(\s*echo Codex is not logged in[\s\S]*codex login --device-auth/);
   assert.match(source, /server\.ps1/);
 });
 

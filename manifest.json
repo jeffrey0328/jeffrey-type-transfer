@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Jeffrey Type Transfer",
   "short_name": "Jeffrey Type Transfer",
-  "description": "选中网页输入框文字，通过 Codex、Claude、Gemini、Qwen、Ollama、GLM、DeepSeek 或自定义 API 翻译并替换。",
+  "description": "选中网页输入框文字，通过本机 Codex CLI 或可选的兼容 API 翻译并替换。",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "contextMenus", "scripting", "sidePanel", "storage"],

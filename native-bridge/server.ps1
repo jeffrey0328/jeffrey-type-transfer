@@ -38,9 +38,11 @@ function Get-BridgeToken {
 }
 
 function Get-CodexPath {
-    $result = & where.exe codex 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $result) { return $null }
-    return [string]($result | Select-Object -First 1)
+    $executable = Get-Command codex.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($executable) { return [string]$executable.Source }
+    $command = Get-Command codex -ErrorAction SilentlyContinue
+    if ($command -and $command.Source -match '\.(exe|ps1|cmd)$') { return [string]$command.Source }
+    return $null
 }
 
 function Quote-ProcessArgument([string]$Value) {
@@ -56,8 +58,17 @@ function Invoke-CodexProcess {
         [int]$TimeoutMs = 15000
     )
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
-    $startInfo.FileName = $CodexPath
-    $startInfo.Arguments = (($Arguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join ' ')
+    $launchArguments = @($Arguments)
+    if ($CodexPath -match '\.ps1$') {
+        $startInfo.FileName = 'powershell.exe'
+        $launchArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $CodexPath) + $launchArguments
+    } elseif ($CodexPath -match '\.cmd$') {
+        $startInfo.FileName = 'cmd.exe'
+        $launchArguments = @('/d', '/s', '/c', $CodexPath) + $launchArguments
+    } else {
+        $startInfo.FileName = $CodexPath
+    }
+    $startInfo.Arguments = (($launchArguments | ForEach-Object { Quote-ProcessArgument ([string]$_) }) -join ' ')
     $startInfo.WorkingDirectory = $BridgeRoot
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
@@ -65,24 +76,20 @@ function Invoke-CodexProcess {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
 
-    $stdout = New-Object System.Text.StringBuilder
-    $stderr = New-Object System.Text.StringBuilder
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
-    $process.add_OutputDataReceived({ param($sender, $eventArgs) if ($null -ne $eventArgs.Data) { [void]$stdout.AppendLine($eventArgs.Data) } })
-    $process.add_ErrorDataReceived({ param($sender, $eventArgs) if ($null -ne $eventArgs.Data) { [void]$stderr.AppendLine($eventArgs.Data) } })
     try {
         if (-not $process.Start()) { throw '无法启动 Codex CLI。' }
-        $process.BeginOutputReadLine(); $process.BeginErrorReadLine()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if ($null -ne $InputText) { $process.StandardInput.Write($InputText) }
         $process.StandardInput.Close()
         if (-not $process.WaitForExit($TimeoutMs)) {
             try { $process.Kill() } catch { }
             $process.WaitForExit()
-            return @{ TimedOut = $true; ExitCode = -1; StdOut = $stdout.ToString(); StdErr = $stderr.ToString() }
+            return @{ TimedOut = $true; ExitCode = -1; StdOut = $stdoutTask.GetAwaiter().GetResult(); StdErr = $stderrTask.GetAwaiter().GetResult() }
         }
-        $process.WaitForExit()
-        return @{ TimedOut = $false; ExitCode = $process.ExitCode; StdOut = $stdout.ToString(); StdErr = $stderr.ToString() }
+        return @{ TimedOut = $false; ExitCode = $process.ExitCode; StdOut = $stdoutTask.GetAwaiter().GetResult(); StdErr = $stderrTask.GetAwaiter().GetResult() }
     } finally {
         if (-not $process.HasExited) { try { $process.Kill() } catch { } }
         $process.Dispose()
@@ -184,7 +191,7 @@ function Get-ScreenshotBytes([string]$DataUrl) {
 }
 
 function Test-Decision($Decision) {
-    if ($null -eq $Decision -or $Decision.PSObject.Properties.Count -ne 2) { return $false }
+    if ($null -eq $Decision -or @($Decision.PSObject.Properties).Count -ne 2) { return $false }
     if ($null -eq $Decision.PSObject.Properties['action'] -or $null -eq $Decision.PSObject.Properties['translation']) { return $false }
     return $Decision.action -eq 'replace_text' -and $Decision.translation -is [string] -and $Decision.translation.Trim().Length -gt 0
 }

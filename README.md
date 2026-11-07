@@ -1,44 +1,44 @@
 # Jeffrey Type Transfer
 
-无需构建的 Chrome/Edge 扩展：将网页可编辑区域中选定的文字交给已登录的 Codex CLI 翻译，再由扩展在当前选区内替换。默认通道为：浏览器扩展 → `127.0.0.1` HTTP 桥接 → Codex CLI。
+**English** | [简体中文](README.zh-CN.md)
 
-## 安装与启动
+Jeffrey Type Transfer is a build-free Chrome/Edge extension. It sends selected text from an editable web page field to a locally signed-in Codex CLI for translation, then replaces the selection in place. The default route is extension → loopback HTTP bridge → Codex CLI.
 
-1. 安装并登录 Codex CLI。首次启动桥接会自动检查登录；只有未登录或登录失效时才显示设备登录。
-2. 双击或在项目根目录运行 `native-bridge\start-bridge.cmd`。它只监听 `http://127.0.0.1:47321`，窗口须保持运行。
-3. 桥接首次启动会在 `native-bridge\.bridge-token` 生成长期随机令牌。扩展设置中点击“获取令牌”即可自动取得它；首次请求会永久绑定当前扩展 ID。令牌文件已被 Git 忽略。
-4. 在 Chrome/Edge 的扩展管理页开启开发者模式，选择“加载已解压的扩展”，选择本项目根目录。
-5. 打开扩展侧边栏，填写桥接地址、令牌和（可选）模型名称，点击“验证连接”。验证成功前不会进入翻译页。
+## Setup
 
-可选模型处可点击“获取模型”载入桥接推荐候选，再通过下拉菜单选择。候选列表不代表该登录账号一定有权限，Codex CLI 会在实际执行时验证。
+1. Install and sign in to Codex CLI. The bridge startup script checks the login and starts device login only when needed.
+2. Run `native-bridge\start-bridge.cmd` from the project root and leave its window open. The bridge listens on `http://127.0.0.1:47321`.
+3. On first launch, the bridge creates a random long-lived token in `native-bridge\.bridge-token`. In the extension settings, click **Get token** to pair the current extension ID and save the token locally. Both pairing files are ignored by Git.
+4. In Chrome or Edge, enable Developer mode on the extensions page and choose **Load unpacked**. Select this project root, which contains `manifest.json`.
+5. Open the extension side panel and click **Check connection**. The translation view remains locked until the connection succeeds.
 
-重启电脑后，只需再次运行 `native-bridge\start-bridge.cmd`；令牌和 Codex CLI 登录由各自本机存储持续保留。登录失效时，启动脚本才会进入设备登录。
+The optional model list contains bridge suggestions, not a guarantee that your account can use each model. Codex CLI checks availability when it executes a request. After restarting your computer, run `native-bridge\start-bridge.cmd` again; the token and Codex login remain in their respective local stores.
 
-## 工作方式与安全边界
+## How it works
 
-- 扩展只把请求发送到固定的回环地址 `127.0.0.1:47321`，每次请求都发送 Bearer 令牌。
-- 桥接拒绝非 Chrome/Edge 扩展的跨域来源、缺少令牌、非 JSON 请求、超大请求和非 PNG/JPEG 截图。
-- 每一次模型调用都固定为 `codex exec --ignore-user-config --skip-git-repo-check --ephemeral --sandbox read-only`，提示词通过标准输入传递。扩展无法选择可执行文件、工作目录、sandbox 或命令参数。
-- Codex 只能返回 `replace_text` 决定和文本；真正的替换仍由扩展对已选中的可编辑区域执行。桥接和扩展都会验证 JSON 结构。
-- 截图与结果文件仅写入独立系统临时目录，并在成功、失败或超时后删除。桥接不会向浏览器返回原始 stderr、凭据或内部路径。
-- `--ignore-user-config` 防止加载用户自定义 MCP/插件配置，但继续使用 Codex 已有登录认证。
+- The extension accepts only an `http://127.0.0.1` bridge URL. The bridge binds to port 47321 by default. Requests to its protected endpoints carry a Bearer token.
+- The bridge checks extension origins for browser requests, authentication, JSON payloads, request size, and PNG/JPEG screenshot data.
+- Every model call uses fixed `codex exec --ignore-user-config --skip-git-repo-check --ephemeral --sandbox read-only` options. The prompt goes through standard input. The extension cannot select an executable, working directory, sandbox, or arbitrary CLI option.
+- Codex returns only a structured `replace_text` decision and translation. The extension performs the actual replacement in the selected editable field. Both layers validate the decision.
+- Screenshots and results use an isolated system temporary directory that is removed after success, failure, or timeout. The bridge does not return raw stderr, credentials, or internal paths to the browser.
+- `--ignore-user-config` prevents loading custom MCP and plugin configuration while retaining the existing Codex login.
 
-## 故障排查
+## Troubleshooting
 
-- “未找到 Codex CLI”：在新的 PowerShell 窗口执行 `where codex`；安装后重新运行启动脚本。
-- “尚未登录”：重新运行 `native-bridge\start-bridge.cmd` 并完成设备登录，不要把登录信息粘贴到扩展或聊天中。
-- “桥接令牌无效”：在同一扩展中再次点击“获取令牌”；不要删除 `.bridge-token`，除非要轮换令牌（删除后重启桥接会生成新令牌）。如需更换浏览器配置文件或扩展 ID，也请一并删除 `.bridge-extension-id` 后重新启动桥接。
-- “无法连接”：确认桥接窗口仍在运行，地址为 `http://127.0.0.1:47321`，且没有其他服务占用该端口。
-- “Codex 执行超时”：本次子进程已被终止；缩短文本或检查登录/模型可用性后重试。
+- **Codex CLI not found:** Run `Get-Command codex` in a new PowerShell window. Install the CLI if needed, then restart the bridge.
+- **Not signed in:** Run `native-bridge\start-bridge.cmd` again and complete device login. Do not paste login details into the extension or a chat.
+- **Invalid bridge token:** Click **Get token** again in the same extension. To rotate the token, stop the bridge, delete `.bridge-token`, and restart. If the extension ID changed, also delete `.bridge-extension-id` before restarting.
+- **Cannot connect:** Keep the bridge window open and confirm that `http://127.0.0.1:47321` is available.
+- **Codex timeout:** The child process has been stopped. Try shorter text or check login and model availability.
 
-可选的 API Key 模式仍保留为未来 provider 接口，默认不会使用它。
+An optional API key mode remains available for compatible providers and is not used by default.
 
-## 验证
+## Validation
 
-运行 `npm run check` 和 `npm test` 可检查扩展原生文件及 JavaScript 测试。PowerShell 静态语法检查：
+Run `npm run check` and `npm test` for the extension and JavaScript tests. To check PowerShell syntax:
 
 ```powershell
 [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\native-bridge\server.ps1), [ref]$null, [ref]$errors); $errors
 ```
 
-详细桥接接口见 [native-bridge/README.md](native-bridge/README.md)。
+See the [bridge interface documentation](native-bridge/README.md) for its endpoints and token lifecycle.
